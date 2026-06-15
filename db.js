@@ -83,21 +83,12 @@ async function getLastLogForTemplate(templateId) {
 async function addSessionLog(log) { return db.sessionLogs.add(plain(log)); }
 async function putSessionLog(log) { return db.sessionLogs.put(plain(log)); }
 
-// ── Exercise Defaults (per-exercise last weight/reps/rpe memory) ───────────────
-async function getExerciseDefault(exerciseId) {
-  return db.exerciseDefaults.get(exerciseId);
-}
 
-async function setExerciseDefault(exerciseId, values) {
-  const existing = (await db.exerciseDefaults.get(exerciseId)) || { exerciseId };
-  await db.exerciseDefaults.put(plain({ ...existing, ...values, exerciseId }));
-}
 
 export {
   db, initDB,
   getAppState, patchAppState,
   getActiveProgram, saveProgram, deleteActiveProgram,
   getTemplates, saveTemplate, deleteTemplate,
-  getAllLogs, getLogsForTemplate, getLastLogForTemplate, addSessionLog, putSessionLog,
-  getExerciseDefault, setExerciseDefault
+  getAllLogs, getLogsForTemplate, getLastLogForTemplate, addSessionLog, putSessionLog
 };

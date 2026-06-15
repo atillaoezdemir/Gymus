@@ -3,8 +3,7 @@
 import {
   getAppState, patchAppState,
   getLogsForTemplate, getLastLogForTemplate,
-  addSessionLog, putSessionLog,
-  getExerciseDefault, setExerciseDefault
+  addSessionLog, putSessionLog
 } from './db.js';
 import { DrumPicker, SetIndicator, useStopwatch } from './components.js';
 
@@ -162,13 +161,11 @@ export const ActiveSessionView = {
       return (prevLog.value.exerciseLogs || []).find(e => e.exerciseId === exerciseId) || null;
     }
 
-    async function loadDrumDefaults(exerciseId, setIndex) {
-      // Priority: exerciseDefaults.lastWeight > prev session same set > 0
-      const def = await getExerciseDefault(exerciseId);
+    function loadDrumDefaults(exerciseId, setIndex) {
       const prevSet = getPrevSetForExercise(exerciseId, setIndex);
-      drumMass.value = def?.lastWeight ?? prevSet?.weight ?? 0;
-      drumReps.value = def?.lastReps ?? prevSet?.reps ?? 8;
-      drumRpe.value = def?.lastRpe ?? prevSet?.rpe ?? 7;
+      drumMass.value = prevSet?.weight ?? 0;
+      drumReps.value = prevSet?.reps ?? 8;
+      drumRpe.value = prevSet?.rpe ?? 7;
       prevSetData.value = prevSet;
     }
 
@@ -294,8 +291,6 @@ export const ActiveSessionView = {
         if (!completedSets.value[exerciseId]) completedSets.value[exerciseId] = [];
         completedSets.value[exerciseId].push(setObj);
 
-        // Save exercise default (persistent weight memory)
-        await setExerciseDefault(exerciseId, { lastWeight: drumMass.value, lastReps: drumReps.value, lastRpe: drumRpe.value });
         await persist();
 
         if (curSetNum.value < (curEx.value.defaultSets || 3)) {
