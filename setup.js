@@ -6,7 +6,7 @@ import {
 } from './db.js';
 import { DrumPicker } from './components.js';
 
-const { ref, computed, reactive } = Vue;
+const { ref, computed, reactive, watch } = Vue;
 
 function genId() {
   return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c =>
@@ -85,6 +85,10 @@ const SessionEditor = {
     const editingIdx = ref(null);
     const sessionName = ref(props.session.name || '');
 
+    watch(() => props.session, (newSession) => {
+      sessionName.value = newSession.name || '';
+    });
+
     function updateName() {
       emit('update', { ...props.session, name: sessionName.value });
     }
@@ -149,9 +153,9 @@ const SessionEditor = {
       </div>
 
       <div class="flex gap-2 mt-4">
-        <button v-if="index > 0" class="btn btn-outline" style="flex:1;" @click="$emit('prev')">← Prev</button>
-        <button class="btn btn-primary" style="flex:2;" :disabled="!canNext()" @click="next">
-          {{ index === total - 1 ? 'Review →' : 'Next session →' }}
+        <button v-if="index > 0" class="btn btn-ghost" style="flex:1;" @click="$emit('prev')">Previous</button>
+        <button class="btn btn-primary" :style="{flex: index > 0 ? '1' : '1'}" :disabled="!canNext()" @click="next">
+          {{ index === total - 1 ? 'Review' : 'Continue' }}
         </button>
       </div>
     </div>
@@ -171,7 +175,7 @@ export const ConfigureCycleView = {
 
     function confirmCount() {
       sessions.value = Array.from({ length: sessionCount.value }, (_, i) => ({
-        tempId: i, name: '', exercises: [], sessionIndex: i
+        tempId: genId(), name: '', exercises: [], sessionIndex: i
       }));
       curIdx.value = 0;
       step.value = 'sessions';
@@ -188,6 +192,102 @@ export const ConfigureCycleView = {
 
     function prevSession() { if (curIdx.value > 0) curIdx.value--; }
 
+    // ── Review management ─────────────────────────────────────────
+    function deleteSession(idx) {
+      sessions.value.splice(idx, 1);
+      sessionCount.value = sessions.value.length;
+      sessions.value.forEach((s, i) => { s.sessionIndex = i; });
+      if (sessions.value.length === 0) step.value = 'count';
+    }
+
+    function moveSession(idx, dir) {
+      const newIdx = idx + dir;
+      if (newIdx < 0 || newIdx >= sessions.value.length) return;
+      const arr = [...sessions.value];
+      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+      arr.forEach((s, i) => { s.sessionIndex = i; });
+      sessions.value = arr;
+    }
+
+    function deleteExercise(sIdx, eIdx) {
+      const exercises = sessions.value[sIdx].exercises.filter((_, i) => i !== eIdx);
+      sessions.value[sIdx] = { ...sessions.value[sIdx], exercises };
+    }
+
+    function moveExercise(sIdx, eIdx, dir) {
+      const newIdx = eIdx + dir;
+      const exercises = [...sessions.value[sIdx].exercises];
+      if (newIdx < 0 || newIdx >= exercises.length) return;
+      [exercises[eIdx], exercises[newIdx]] = [exercises[newIdx], exercises[eIdx]];
+      sessions.value[sIdx] = { ...sessions.value[sIdx], exercises };
+    }
+
+    // ── Drag-to-reorder ───────────────────────────────────────────
+    const drag = reactive({
+      active: false,
+      type: null,   // 'session' | 'exercise'
+      sIdx: null,
+      eIdx: null,
+      startY: 0,
+      offsetY: 0,
+    });
+
+    function onDragStart(e, type, sIdx, eIdx) {
+      const isTouch = e.type === 'touchstart';
+      const point = isTouch ? e.touches[0] : e;
+      drag.active = true;
+      drag.type = type;
+      drag.sIdx = sIdx;
+      drag.eIdx = eIdx;
+      drag.startY = point.clientY;
+      drag.offsetY = 0;
+      if (isTouch) {
+        document.addEventListener('touchmove', onDragMove, { passive: false });
+        document.addEventListener('touchend', onDragEnd);
+      } else {
+        document.addEventListener('mousemove', onDragMove);
+        document.addEventListener('mouseup', onDragEnd);
+      }
+    }
+
+    function onDragMove(e) {
+      if (!drag.active) return;
+      e.preventDefault();
+      const point = e.touches ? e.touches[0] : e;
+      drag.offsetY = point.clientY - drag.startY;
+      const threshold = drag.type === 'session' ? 60 : 40;
+      if (Math.abs(drag.offsetY) > threshold) {
+        const dir = drag.offsetY > 0 ? 1 : -1;
+        if (drag.type === 'session') {
+          const newIdx = drag.sIdx + dir;
+          if (newIdx >= 0 && newIdx < sessions.value.length) {
+            moveSession(drag.sIdx, dir);
+            drag.sIdx = newIdx;
+            drag.startY = point.clientY;
+            drag.offsetY = 0;
+          }
+        } else {
+          const exercises = sessions.value[drag.sIdx].exercises;
+          const newIdx = drag.eIdx + dir;
+          if (newIdx >= 0 && newIdx < exercises.length) {
+            moveExercise(drag.sIdx, drag.eIdx, dir);
+            drag.eIdx = newIdx;
+            drag.startY = point.clientY;
+            drag.offsetY = 0;
+          }
+        }
+      }
+    }
+
+    function onDragEnd() {
+      drag.active = false;
+      drag.offsetY = 0;
+      document.removeEventListener('touchmove', onDragMove);
+      document.removeEventListener('touchend', onDragEnd);
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragEnd);
+    }
+
     // Save programme (iterates sessions array correctly)
     async function saveProg() {
       saving.value = true;
@@ -203,7 +303,7 @@ export const ConfigureCycleView = {
       } finally { saving.value = false; }
     }
 
-    return { step, sessionCount, sessions, curIdx, confirmCount, updateSession, nextSession, prevSession, saveProg, saving };
+    return { step, sessionCount, sessions, curIdx, confirmCount, updateSession, nextSession, prevSession, deleteSession, deleteExercise, drag, onDragStart, saveProg, saving };
   },
   template: `
     <div>
@@ -235,20 +335,58 @@ export const ConfigureCycleView = {
         <!-- STEP: Summary -->
         <div v-else-if="step === 'summary'" key="summary">
           <p class="section-title">All set!</p>
-          <p class="text-secondary text-sm mb-4">Review your {{ sessionCount }}-session cycle.</p>
-          <div v-for="s in sessions" :key="s.tempId" class="card mb-3">
-            <p style="font-size:17px; font-weight:700;">{{ s.name }}</p>
-            <p class="text-xs text-secondary mt-1">{{ s.exercises.length }} exercise{{ s.exercises.length !== 1 ? 's' : '' }}</p>
-            <div class="mt-2">
-              <div v-for="ex in s.exercises" :key="ex.id" class="flex items-center gap-2" style="padding:6px 0; border-bottom:1px solid var(--border);">
-                <span class="exercise-row-name" style="font-size:15px;">{{ ex.name }}</span>
+          <p class="text-secondary text-sm mb-4">Review your {{ sessions.length }}-session cycle.</p>
+
+          <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card mb-3"
+            :style="drag.active && drag.type === 'session' && drag.sIdx === sIdx
+              ? {transform: 'translateY('+drag.offsetY+'px)', transition: 'none', zIndex: 10, position: 'relative', boxShadow: 'var(--shadow-lg)', opacity: 0.92}
+              : {transition: 'transform 180ms ease'}">
+            <div class="flex items-center" style="gap:12px; margin-bottom:8px;">
+              <div class="drag-handle"
+                @touchstart.prevent="onDragStart($event, 'session', sIdx, null)"
+                @mousedown.prevent="onDragStart($event, 'session', sIdx, null)">
+                <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor" style="display:block;">
+                  <circle cx="4" cy="4" r="2"/><circle cx="10" cy="4" r="2"/>
+                  <circle cx="4" cy="10" r="2"/><circle cx="10" cy="10" r="2"/>
+                  <circle cx="4" cy="16" r="2"/><circle cx="10" cy="16" r="2"/>
+                </svg>
+              </div>
+              <div style="flex:1; min-width:0;">
+                <p style="font-size:17px; font-weight:700;">{{ s.name }}</p>
+                <p class="text-xs text-secondary mt-1">{{ s.exercises.length }} exercise{{ s.exercises.length !== 1 ? 's' : '' }}</p>
+              </div>
+              <button class="review-action-btn review-action-btn--danger" @click="deleteSession(sIdx)" title="Delete session">✕</button>
+            </div>
+            <div>
+              <div v-for="(ex, eIdx) in s.exercises" :key="ex.id" class="flex items-center"
+                :style="{
+                  padding: '8px 0',
+                  borderBottom: eIdx < s.exercises.length - 1 ? '1px solid var(--border)' : 'none',
+                  transform: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 'translateY('+drag.offsetY+'px)' : '',
+                  transition: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 'none' : 'transform 180ms ease',
+                  zIndex: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 5 : 'auto',
+                  position: 'relative',
+                  background: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 'var(--bg-card)' : ''
+                }">
+                <div class="drag-handle drag-handle--sm"
+                  @touchstart.prevent="onDragStart($event, 'exercise', sIdx, eIdx)"
+                  @mousedown.prevent="onDragStart($event, 'exercise', sIdx, eIdx)">
+                  <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" style="display:block;">
+                    <circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/>
+                    <circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/>
+                    <circle cx="3" cy="13" r="1.5"/><circle cx="7" cy="13" r="1.5"/>
+                  </svg>
+                </div>
+                <span class="exercise-row-name" style="font-size:15px; flex:1; padding:0 8px;">{{ ex.name }}</span>
+                <button class="review-action-btn review-action-btn--sm review-action-btn--danger" @click="deleteExercise(sIdx, eIdx)" title="Delete exercise">✕</button>
               </div>
             </div>
           </div>
-          <button class="btn btn-accent mt-2" :disabled="saving" @click="saveProg">
-            {{ saving ? 'Saving…' : '💾 Save programme' }}
+
+          <button class="btn btn-accent mt-2" :disabled="saving || sessions.length === 0" @click="saveProg">
+            {{ saving ? 'Saving…' : 'Save programme' }}
           </button>
-          <button class="btn btn-ghost mt-2" @click="step='sessions'; curIdx=sessions.length-1">← Edit sessions</button>
+          <button class="btn btn-ghost mt-2" @click="step='sessions'; curIdx=sessions.length-1">Edit sessions</button>
         </div>
       </transition>
     </div>

@@ -888,6 +888,78 @@
     .w-full {
       width: 100%
     }
+
+    /* ── Review action buttons (delete only) ── */
+    .review-action-btn {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-card-alt);
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 150ms;
+      -webkit-tap-highlight-color: transparent;
+      flex-shrink: 0;
+    }
+
+    .review-action-btn:active {
+      background: var(--border);
+      transform: scale(0.92);
+    }
+
+    .review-action-btn--danger {
+      color: var(--danger);
+      border-color: var(--danger-light);
+    }
+
+    .review-action-btn--danger:active {
+      background: var(--danger-light);
+    }
+
+    .review-action-btn--sm {
+      width: 28px;
+      height: 28px;
+      font-size: 12px;
+      border-radius: 6px;
+    }
+
+    /* ── Drag handle (grip for reorder) ── */
+    .drag-handle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      min-height: 36px;
+      cursor: grab;
+      touch-action: none;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      border-radius: 6px;
+      transition: color 150ms, background 150ms;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .drag-handle:hover {
+      color: var(--text-secondary);
+      background: var(--bg-card-alt);
+    }
+
+    .drag-handle:active {
+      cursor: grabbing;
+      color: var(--text-primary);
+      background: var(--bg-card-alt);
+    }
+
+    .drag-handle--sm {
+      width: 22px;
+      min-height: 28px;
+    }
   </style>
 </head>
 
