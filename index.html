@@ -970,6 +970,10 @@
   </div>
   <script>
     function showErr(msg) {
+      if (typeof msg === 'string' && msg.includes('Connection to Indexed Database server lost')) {
+        window.location.reload();
+        return;
+      }
       var el = document.getElementById('err');
       if (el) { el.style.display = 'block'; el.textContent += msg + '\n\n'; }
     }
