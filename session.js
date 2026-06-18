@@ -139,7 +139,11 @@ export const ActiveSessionView = {
     // ── Timer helpers ──────────────────────────────────────────────────────────
     function tickSession() { sessionSecs.value = Math.floor((Date.now() - sessionStart) / 1000); }
     function tickPhase() { phaseSecs.value = Math.floor((Date.now() - phaseStart) / 1000); }
-    function resetPhase() { phaseStart = Date.now(); phaseSecs.value = 0; }
+    function resetPhase() { 
+      phaseStart = Date.now(); 
+      phaseSecs.value = 0; 
+      localStorage.setItem('gymus_phase_start', phaseStart.toString());
+    }
 
     function startTimers() {
       sessionTimer = setInterval(tickSession, 500);
@@ -190,6 +194,10 @@ export const ActiveSessionView = {
         });
         exIdx.value = incomplete >= 0 ? incomplete : 0;
         phase.value = 'break';
+        const savedPhaseStart = localStorage.getItem('gymus_phase_start');
+        if (savedPhaseStart) {
+          phaseStart = parseInt(savedPhaseStart, 10) || Date.now();
+        }
       } else {
         // New session
         sessionLog.value = {
