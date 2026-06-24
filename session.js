@@ -114,6 +114,7 @@ export const ActiveSessionView = {
 
     // Previous set data for current exercise+set
     const prevSetData = ref(null);
+    let lastSetDurationMs = 0;
 
     // Completed sets per exerciseId
     const completedSets = ref({});           // exerciseId -> [set objects]
@@ -258,7 +259,12 @@ export const ActiveSessionView = {
     // ── Set controls ───────────────────────────────────────────────────────────
     function onReady() { phase.value = 'in-set'; resetPhase(); }
 
-    function onDone() { phase.value = 'data-entry'; dataCard.value = 0; }
+    function onDone() {
+      lastSetDurationMs = Math.round(phaseSecs.value * 1000);
+      phase.value = 'data-entry';
+      dataCard.value = 0;
+      resetPhase();
+    }
 
     async function onSkipSet() {
       const setNum = curSetNum.value + 1;
@@ -286,14 +292,13 @@ export const ActiveSessionView = {
       if (dataCard.value === 2) {
         const setNum = curSetNum.value + 1;
         const exerciseId = curEx.value.id;
-        const timeSecs = phaseSecs.value;
         const setObj = {
           setNumber: setNum,
           skipped: false,
           weight: drumMass.value,
           reps: drumReps.value,
           rpe: drumRpe.value,
-          setDurationMs: Math.round(phaseSecs.value * 1000),
+          setDurationMs: lastSetDurationMs,
           restDurationMs: 0
         };
         if (!completedSets.value[exerciseId]) completedSets.value[exerciseId] = [];
@@ -303,7 +308,6 @@ export const ActiveSessionView = {
 
         if (curSetNum.value < (curEx.value.defaultSets || 3)) {
           phase.value = 'break';
-          resetPhase();
           await loadDrumDefaults(exerciseId, curSetNum.value);
         } else {
           phase.value = 'post-set';
