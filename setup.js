@@ -335,7 +335,7 @@ export const ConfigureCycleView = {
         <!-- STEP: Summary -->
         <div v-else-if="step === 'summary'" key="summary">
           <p class="section-title">All set!</p>
-          <p class="text-secondary text-sm mb-4">Review your {{ sessions.length }}-session cycle.</p>
+          <p class="text-secondary text-sm mb-4" style="line-height: 1.45;">Almost done! Here is your {{ sessions.length }}-session cycle. You can drag the handles to reorder sessions and exercises, or use the ✕ button to remove anything you don't need.</p>
 
           <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card mb-3"
             :style="drag.active && drag.type === 'session' && drag.sIdx === sIdx

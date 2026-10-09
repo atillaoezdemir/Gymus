@@ -14,6 +14,29 @@ function avgRpe(sets) {
   return v.length ? (v.reduce((a,b)=>a+b,0)/v.length) : null;
 }
 
+// Sessions logged before the idle-gap fix could record days of wall-clock time.
+// Anything beyond these limits is not real training time.
+const MAX_SESSION_MIN = 4 * 60;
+const MAX_SET_MS      = 10 * 60 * 1000;
+const MAX_REST_MS     = 15 * 60 * 1000;
+
+const validSetMs  = ms => ms > 0 && ms <= MAX_SET_MS;
+const validRestMs = ms => ms > 0 && ms <= MAX_REST_MS;
+
+// Trust the recorded duration when plausible, otherwise rebuild it from set timings
+function sessionMinutes(log) {
+  const d = log.totalDuration;
+  if (d != null && d >= 0 && d <= MAX_SESSION_MIN) return d;
+  let ms = 0;
+  for (const el of (log.exerciseLogs || [])) {
+    for (const s of (el.sets || [])) {
+      if (validSetMs(s.setDurationMs)) ms += s.setDurationMs;
+      if (validRestMs(s.restDurationMs)) ms += s.restDurationMs;
+    }
+  }
+  return ms ? Math.round(ms / 60000) : null;
+}
+
 const CHART_DEFS = [
   { key:'volume',   label:'Volume',      type:'line' },
   { key:'maxWeight',label:'Max weight',  type:'line' },
@@ -92,13 +115,13 @@ export const AnalyticsView = {
         return { labels, datasets:[{ label:'Avg RPE', data: d.map(x => avgRpe(x.sets)), borderColor:'#C07A6A', backgroundColor:'rgba(192,122,106,0.15)', tension:0.3, fill:true }] };
       }
       if (chartTab.value === 'setTime') {
-        return { labels, datasets:[{ label:'Avg set time (s)', data: d.map(x => { const v=x.sets.filter(s=>s.setDurationMs).map(s=>s.setDurationMs/1000); return v.length?(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1):null; }), borderColor:'#9B7DC0', backgroundColor:'rgba(155,125,192,0.15)', tension:0.3, fill:true }] };
+        return { labels, datasets:[{ label:'Avg set time (s)', data: d.map(x => { const v=x.sets.filter(s=>validSetMs(s.setDurationMs)).map(s=>s.setDurationMs/1000); return v.length?(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1):null; }), borderColor:'#9B7DC0', backgroundColor:'rgba(155,125,192,0.15)', tension:0.3, fill:true }] };
       }
       if (chartTab.value === 'restTime') {
-        return { labels, datasets:[{ label:'Avg rest time (s)', data: d.map(x => { const v=x.sets.filter(s=>s.restDurationMs).map(s=>s.restDurationMs/1000); return v.length?(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1):null; }), borderColor:'#B8A04A', backgroundColor:'rgba(184,160,74,0.15)', tension:0.3, fill:true }] };
+        return { labels, datasets:[{ label:'Avg rest time (s)', data: d.map(x => { const v=x.sets.filter(s=>validRestMs(s.restDurationMs)).map(s=>s.restDurationMs/1000); return v.length?(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1):null; }), borderColor:'#B8A04A', backgroundColor:'rgba(184,160,74,0.15)', tension:0.3, fill:true }] };
       }
       if (chartTab.value === 'wVsRest') {
-        const pts = d.flatMap(x => x.sets.filter(s=>s.weight&&s.restDurationMs).map(s=>({ x: s.restDurationMs/1000, y: s.weight })));
+        const pts = d.flatMap(x => x.sets.filter(s=>s.weight&&validRestMs(s.restDurationMs)).map(s=>({ x: s.restDurationMs/1000, y: s.weight })));
         return { datasets:[{ label:'Weight vs Rest', data: pts, backgroundColor:'rgba(125,155,118,0.6)' }] };
       }
       if (chartTab.value === 'wVsOrder') {
@@ -142,7 +165,7 @@ export const AnalyticsView = {
         const labels = logs.map(l => fmtDate(l.startedAt));
 
         const configs = [
-          { id:'s-duration', label:'Duration (min)', data: logs.map(l=>l.totalDuration||0), color:'#7D9B76' },
+          { id:'s-duration', label:'Duration (min)', data: logs.map(sessionMinutes), color:'#7D9B76' },
           { id:'s-physical', label:'Physical score', data: logs.map(l => {
             const e = l.evaluation;
             if (!e) return null;
@@ -178,7 +201,7 @@ export const AnalyticsView = {
 
     const hasEnough = computed(() => allLogs.value.length >= 2);
 
-    return { loading, hasEnough, exercises, selExId, chartTab, allLogs, expandedLog, CHART_DEFS, renderChart };
+    return { loading, hasEnough, exercises, selExId, chartTab, allLogs, expandedLog, CHART_DEFS, renderChart, sessionMinutes };
   },
   template: `
     <div class="main-content">
@@ -227,7 +250,7 @@ export const AnalyticsView = {
           <div class="log-header" @click="expandedLog = expandedLog===log.id ? null : log.id">
             <div>
               <p class="log-date">{{ new Date(log.startedAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) }}</p>
-              <p class="log-meta">{{ log.totalDuration ? log.totalDuration + ' min' : '' }} · {{ (log.exerciseLogs||[]).length }} exercises</p>
+              <p class="log-meta">{{ sessionMinutes(log) ? sessionMinutes(log) + ' min · ' : '' }}{{ (log.exerciseLogs||[]).length }} exercises</p>
             </div>
             <span style="color:var(--text-muted); font-size:18px;">{{ expandedLog===log.id ? '▲' : '▼' }}</span>
           </div>

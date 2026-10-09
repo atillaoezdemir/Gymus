@@ -14,6 +14,9 @@ function genId() {
     (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
 }
 
+// Reopening a session after this much inactivity pauses the clock for the gap
+const STALE_SESSION_MS = 60 * 60 * 1000;
+
 function fmt2(n) { return String(n).padStart(2, '0'); }
 function fmtSecs(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -99,6 +102,7 @@ export const ActiveSessionView = {
     let phaseTimer = null;
     let phaseStart = Date.now();
     let sessionStart = Date.now();
+    let pausedMs = 0;                 // idle time excluded from the session clock
 
     // ── Resume or start fresh ──────────────────────────────────────────────────
     const sessionLog = ref(null);         // the in-progress log object
@@ -138,7 +142,7 @@ export const ActiveSessionView = {
     });
 
     // ── Timer helpers ──────────────────────────────────────────────────────────
-    function tickSession() { sessionSecs.value = Math.floor((Date.now() - sessionStart) / 1000); }
+    function tickSession() { sessionSecs.value = Math.floor((Date.now() - sessionStart - pausedMs) / 1000); }
     function tickPhase() { phaseSecs.value = Math.floor((Date.now() - phaseStart) / 1000); }
     function resetPhase() { 
       phaseStart = Date.now(); 
@@ -151,7 +155,38 @@ export const ActiveSessionView = {
       phaseTimer = setInterval(tickPhase, 500);
     }
 
-    onUnmounted(() => { clearInterval(sessionTimer); clearInterval(phaseTimer); });
+    // A session left open for hours (app closed or backgrounded mid-workout) must
+    // not count that gap as training time, otherwise duration/rest charts blow up.
+    function absorbIdleGap() {
+      const log = sessionLog.value;
+      if (!log) return false;
+      // Every Ready/Done/set writes gymus_phase_start, so it marks the last interaction
+      const lastActive = Math.max(
+        new Date(log.lastActiveAt || log.startedAt).getTime(),
+        parseInt(localStorage.getItem('gymus_phase_start'), 10) || 0
+      );
+      const idleMs = Date.now() - lastActive;
+      if (idleMs <= STALE_SESSION_MS) return false;
+      pausedMs += idleMs;
+      log.pausedMs = pausedMs;
+      log.lastActiveAt = new Date().toISOString();
+      return true;
+    }
+
+    async function onVisibility() {
+      if (document.visibilityState !== 'visible' || evalPhase.value) return;
+      if (absorbIdleGap()) {
+        resetPhase();
+        tickSession();
+        await persist();
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+
+    onUnmounted(() => {
+      clearInterval(sessionTimer); clearInterval(phaseTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    });
 
     // ── Prev data helpers ──────────────────────────────────────────────────────
     function getPrevSetForExercise(exerciseId, setIndex) {
@@ -183,6 +218,8 @@ export const ActiveSessionView = {
         // Auto-resume
         sessionLog.value = aState.activeSessionLog;
         sessionStart = new Date(sessionLog.value.startedAt).getTime();
+        pausedMs = sessionLog.value.pausedMs || 0;
+        const stale = absorbIdleGap();
         // Reconstruct completedSets
         for (const el of (sessionLog.value.exerciseLogs || [])) {
           completedSets.value[el.exerciseId] = el.sets || [];
@@ -196,7 +233,10 @@ export const ActiveSessionView = {
         exIdx.value = incomplete >= 0 ? incomplete : 0;
         phase.value = 'break';
         const savedPhaseStart = localStorage.getItem('gymus_phase_start');
-        if (savedPhaseStart) {
+        if (stale) {
+          resetPhase();
+          await persist();
+        } else if (savedPhaseStart) {
           phaseStart = parseInt(savedPhaseStart, 10) || Date.now();
         }
       } else {
@@ -206,6 +246,8 @@ export const ActiveSessionView = {
           cycleNumber: props.appState.currentCycleNumber,
           sessionIndex: props.appState.currentSessionIndex,
           startedAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+          pausedMs: 0,
           endedAt: null,
           totalDuration: null,
           skipped: false,
@@ -242,6 +284,7 @@ export const ActiveSessionView = {
         sets: plain(completedSets.value[ex.id] || [])
       }));
       sessionLog.value.exerciseLogs = exerciseLogs;
+      sessionLog.value.lastActiveAt = new Date().toISOString();
       await patchAppState({ activeSessionLog: plain(sessionLog.value) });
     }
 
@@ -257,7 +300,17 @@ export const ActiveSessionView = {
     }
 
     // ── Set controls ───────────────────────────────────────────────────────────
-    function onReady() { phase.value = 'in-set'; resetPhase(); }
+    async function onReady() {
+      // Break between sets of the same exercise belongs to the previous set
+      const last = curSets.value[curSets.value.length - 1];
+      const restMs = Math.round(phaseSecs.value * 1000);
+      phase.value = 'in-set';
+      resetPhase();
+      if (last && !last.skipped && !last.restDurationMs) {
+        last.restDurationMs = restMs;
+        await persist();
+      }
+    }
 
     function onDone() {
       lastSetDurationMs = Math.round(phaseSecs.value * 1000);
@@ -323,12 +376,14 @@ export const ActiveSessionView = {
     }
 
     async function nextExercise() {
-      phase.value = 'break';
-      resetPhase();
-      // Move rest duration to last set
+      // Move rest duration to last set (read it before the phase clock resets)
       const exId = curEx.value.id;
       const sets = completedSets.value[exId];
-      if (sets?.length) sets[sets.length - 1].restDurationMs = Math.round(phaseSecs.value * 1000);
+      const last = sets?.[sets.length - 1];
+      if (last && !last.restDurationMs) last.restDurationMs = Math.round(phaseSecs.value * 1000);
+      phase.value = 'break';
+      resetPhase();
+      await persist();
 
       if (exIdx.value < exercises.value.length - 1) {
         exIdx.value++;
