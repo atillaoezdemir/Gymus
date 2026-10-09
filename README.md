@@ -5,8 +5,8 @@
 Gymus is a Progressive Web App built for one person and one phone. Add it to your iOS home screen from Safari and it behaves like a native app: it works in airplane mode, keeps your data on the device, and shows you one thing at a time so you can log a set with sweaty hands between reps.
 
 <p align="center">
-  <img src="docs/screenshots/01-pre-session.webp" width="220" alt="Pre-session screen showing the next workout of the cycle">
-  <img src="docs/screenshots/02-break.webp" width="220" alt="Active session with session and break timers">
+  <img src="docs/screenshots/01-pre-session.jpg" width="220" alt="Pre-session screen showing the next workout of the cycle">
+  <img src="docs/screenshots/02-break.jpg" width="220" alt="Active session with session and break timers">
   <img src="docs/screenshots/09-analytics.jpg" width="220" alt="Analytics with max-weight progression and session duration">
 </p>
 
@@ -31,7 +31,7 @@ The interface is designed for use mid-workout: a warm off-white palette with mut
 
 | Next session | During the break |
 |:---:|:---:|
-| <img src="docs/screenshots/01-pre-session.webp" width="260" alt="Pre-session"> | <img src="docs/screenshots/02-break.webp" width="260" alt="Break"> |
+| <img src="docs/screenshots/01-pre-session.jpg" width="260" alt="Pre-session"> | <img src="docs/screenshots/02-break.jpg" width="260" alt="Break"> |
 | The next session of the cycle, its exercises and when you last did it. Start it or skip it. | Session and break timers, what you did last time, and your note for this exercise. Tap the exercise name to jump to another one. |
 
 ### 2. Log the set
@@ -40,34 +40,36 @@ After tapping *Done*, three full-screen cards follow one another. Swipe the drum
 
 | Weight | Reps | RPE |
 |:---:|:---:|:---:|
-| <img src="docs/screenshots/03-mass.webp" width="220" alt="Weight entry"> | <img src="docs/screenshots/04-reps.webp" width="220" alt="Reps entry"> | <img src="docs/screenshots/05-rpe.webp" width="220" alt="RPE entry"> |
+| <img src="docs/screenshots/03-mass.jpg" width="220" alt="Weight entry"> | <img src="docs/screenshots/04-reps.jpg" width="220" alt="Reps entry"> | <img src="docs/screenshots/05-rpe.jpg" width="220" alt="RPE entry"> |
 
 ### 3. Wrap up
 
 | Check-in (1 of 11) | Session notes |
 |:---:|:---:|
-| <img src="docs/screenshots/06-evaluation.webp" width="260" alt="Evaluation"> | <img src="docs/screenshots/07-notes.webp" width="260" alt="Notes"> |
+| <img src="docs/screenshots/06-evaluation.jpg" width="260" alt="Evaluation"> | <img src="docs/screenshots/07-notes.jpg" width="260" alt="Notes"> |
 | Rate each item from 0 to 10. Skip twice in a row to end the check-in early. | Add a free-text note, then save and finish. |
 
 ### 4. Track progress
 
 | Exercise charts | Session trends | Navigation |
 |:---:|:---:|:---:|
-| <img src="docs/screenshots/09-analytics.jpg" width="220" alt="Exercise analytics"> | <img src="docs/screenshots/10-session-trends.jpg" width="220" alt="Session trends"> | <img src="docs/screenshots/08-menu.webp" width="220" alt="Menu"> |
-
-> The analytics screenshots use demo data.
+| <img src="docs/screenshots/09-analytics.jpg" width="220" alt="Exercise analytics"> | <img src="docs/screenshots/10-session-trends.jpg" width="220" alt="Session trends"> | <img src="docs/screenshots/08-menu.jpg" width="220" alt="Menu"> |
 
 ## Getting started
 
-### On your iPhone
+**Live app: <https://atillaoezdemir.github.io/Gymus/>**
 
-1. Open the hosted app in **Safari**.
+1. Open the link above in **Safari** on your iPhone.
 2. Tap **Share → Add to Home Screen**.
 3. Launch Gymus from the home screen, go to **Setup** and create your cycle.
 
+After the first launch the app works fully offline.
+
+## For developers
+
 ### Running locally
 
-There is no build step and no `npm install`. Serve the folder with any static server:
+The app is plain HTML and JavaScript, so you don't need to install or build anything. Serve the folder with any static server:
 
 ```bash
 python3 -m http.server 8000
