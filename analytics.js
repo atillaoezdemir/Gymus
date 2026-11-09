@@ -136,7 +136,58 @@ const hoverLine = {
   }
 };
 
-function axes({ yUnit = '', decimals = 0, xTitle, yTitle, xLinear = false }) {
+// Breaks longer than this are drawn dashed and labelled on date-axis charts
+const GAP_DAYS = 21;
+
+// Writes "N-day break" over long gaps so time off is visible, not hidden
+const gapLabel = {
+  id: 'gapLabel',
+  afterDatasetsDraw(chart) {
+    const pts = chart.getDatasetMeta(0)?.data || [];
+    const raw = chart.data.datasets[0]?.data || [];
+    const { ctx, chartArea: { top } } = chart;
+    ctx.save();
+    ctx.font = `600 10px ${FONT}`;
+    ctx.fillStyle = '#9A958F';
+    ctx.textAlign = 'center';
+    let lastRight = -Infinity;
+    for (let i = 1; i < raw.length; i++) {
+      const days = Math.round((raw[i].x - raw[i - 1].x) / DAY_MS);
+      if (days <= GAP_DAYS) continue;
+      const x = (pts[i - 1].x + pts[i].x) / 2;
+      const text = `${days}-day break`;
+      const w = ctx.measureText(text).width;
+      // Skip labels that would collide with the previous one or don't fit the gap
+      if (x - w / 2 < lastRight + 6 || pts[i].x - pts[i - 1].x < w * 0.6) continue;
+      ctx.fillText(text, x, top + 12);
+      lastRight = x + w / 2;
+    }
+    ctx.restore();
+  }
+};
+
+// Calendar-aligned ticks (days, weeks or month starts) for a ms range
+function dateTicks(min, max) {
+  const span = (max - min) / DAY_MS;
+  const out = [];
+  if (span > 75) {
+    const step = span > 400 ? 3 : span > 240 ? 2 : 1;
+    const d = new Date(min); d.setDate(1); d.setHours(0, 0, 0, 0);
+    for (d.setMonth(d.getMonth() + 1); d.getTime() <= max; d.setMonth(d.getMonth() + step)) out.push(d.getTime());
+  } else {
+    const step = span > 35 ? 14 : span > 12 ? 7 : span > 5 ? 2 : 1;
+    const d = new Date(min); d.setHours(0, 0, 0, 0);
+    if (step >= 7) while (d.getDay() !== 1) d.setDate(d.getDate() + 1);  // Mondays
+    else d.setDate(d.getDate() + 1);
+    for (; d.getTime() <= max; d.setDate(d.getDate() + step)) out.push(d.getTime());
+  }
+  return out;
+}
+const fmtTick = (ms, span) => span > 75
+  ? new Date(ms).toLocaleDateString('en-GB', { month: 'short' })
+  : fmtDate(ms);
+
+function axes({ yUnit = '', decimals = 0, xTitle, yTitle, xLinear = false, xDates = null }) {
   const tick = { color: '#B5B0AA', font: { size: 11, family: FONT } };
   const title = text => text ? { display: true, text, color: '#7A7570', font: { size: 11, weight: '600', family: FONT } } : undefined;
   return {
@@ -146,6 +197,7 @@ function axes({ yUnit = '', decimals = 0, xTitle, yTitle, xLinear = false }) {
       border: { display: false },
       ticks: { ...tick, maxRotation: 0, autoSkipPadding: 14 },
       title: title(xTitle),
+      ...(xDates && dateAxis(xDates)),
     },
     y: {
       grid: { color: '#F0EDE8' },
@@ -156,6 +208,20 @@ function axes({ yUnit = '', decimals = 0, xTitle, yTitle, xLinear = false }) {
   };
 }
 
+// Linear x axis over timestamps, so time between sessions is to scale
+function dateAxis(xs) {
+  const lo = Math.min(...xs), hi = Math.max(...xs);
+  const pad = Math.max((hi - lo) * 0.03, 1.5 * DAY_MS);
+  const min = lo - pad, max = hi + pad, span = (max - min) / DAY_MS;
+  return {
+    type: 'linear', min, max,
+    grid: { display: false },
+    afterBuildTicks: axis => { axis.ticks = dateTicks(min, max).map(value => ({ value })); },
+    ticks: { color: '#B5B0AA', font: { size: 11, family: FONT }, maxRotation: 0, autoSkip: false,
+             callback: v => fmtTick(v, span) },
+  };
+}
+
 const compact = lines => (lines || []).filter(Boolean);
 
 // Line chart over a list of "points" (session summaries or exercise entries).
@@ -163,16 +229,23 @@ const compact = lines => (lines || []).filter(Boolean);
 function lineConfig({ points, metric }) {
   const color = metric.color;
   const unit = metric.unit ? ' ' + metric.unit : '';
+  const xs = points.map(p => new Date(p.date).getTime());
+  const longGap = c => c.p1.parsed.x - c.p0.parsed.x > GAP_DAYS * DAY_MS;
   return {
     type: 'line',
     data: {
-      labels: points.map(p => fmtDate(p.date)),
       datasets: [{
-        data: points.map(p => { const v = metric.value(p); return v == null ? null : +v; }),
+        data: points.map((p, i) => { const v = metric.value(p); return { x: xs[i], y: v == null ? null : +v }; }),
+        segment: {
+          borderDash: c => longGap(c) ? [5, 5] : undefined,
+          borderColor: c => longGap(c) ? color + '80' : undefined,
+          backgroundColor: c => longGap(c) ? color + '0A' : undefined,
+        },
         borderColor: color,
         backgroundColor: color + '1F',
         borderWidth: 2.5,
         tension: 0.3,
+        cubicInterpolationMode: 'monotone',  // no overshoot past real values
         fill: true,
         spanGaps: true,
         pointRadius: 4,
@@ -187,7 +260,7 @@ function lineConfig({ points, metric }) {
       responsive: true,
       maintainAspectRatio: false,
       animation: { duration: 250 },
-      interaction: { mode: 'index', intersect: false },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -199,9 +272,9 @@ function lineConfig({ points, metric }) {
           }
         }
       },
-      scales: axes({ yUnit: metric.unit, decimals: metric.decimals || 0 }),
+      scales: axes({ yUnit: metric.unit, decimals: metric.decimals || 0, xDates: xs }),
     },
-    plugins: [hoverLine],
+    plugins: [hoverLine, gapLabel],
   };
 }
 
