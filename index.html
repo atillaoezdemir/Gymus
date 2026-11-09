@@ -1029,7 +1029,9 @@
           }
         });
 
-        function navigate(v) { view.value = v; menuOpen.value = false; }
+        // Reload from DB on every navigation: views mutate appState (e.g. starting a
+        // session) without telling App, so props would otherwise be stale on remount.
+        async function navigate(v) { menuOpen.value = false; await loadData(); view.value = v; }
 
         async function onRefresh() { await loadData(); }
         async function onSessionDone() { await loadData(); }
@@ -1115,6 +1117,7 @@
             key="setup"
             :program="program"
             :templates="templates"
+            :active-template-id="appState?.activeSessionLog?.templateId ?? null"
             @saved="onSetupSaved"
             @refresh="onRefresh"
           />

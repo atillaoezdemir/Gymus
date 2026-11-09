@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gym-v0.8.3';
+const CACHE_NAME = 'gym-v0.8.4';
 
 const ASSET_URLS = [
   'index.html',
@@ -17,9 +17,10 @@ const ASSET_URLS = [
 ];
 
 self.addEventListener('install', event => {
+  // cache: 'reload' bypasses the HTTP cache so a new version never stores stale files
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
-      return Promise.allSettled(ASSET_URLS.map(url => cache.add(url).catch(() => {})));
+      return Promise.allSettled(ASSET_URLS.map(url => cache.add(new Request(url, { cache: 'reload' })).catch(() => {})));
     })
   );
   self.skipWaiting();

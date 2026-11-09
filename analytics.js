@@ -27,7 +27,7 @@ const validRestMs = ms => ms > 0 && ms <= MAX_REST_MS;
 function sessionMinutes(log) {
   const d = log.totalDuration;
   if (d != null && d >= 0 && d <= MAX_SESSION_MIN) return d;
-  let ms = 0;
+  let ms = validRestMs(log.warmupMs) ? log.warmupMs : 0;
   for (const el of (log.exerciseLogs || [])) {
     for (const s of (el.sets || [])) {
       if (validSetMs(s.setDurationMs)) ms += s.setDurationMs;
@@ -35,6 +35,10 @@ function sessionMinutes(log) {
     }
   }
   return ms ? Math.round(ms / 60000) : null;
+}
+
+function warmupMinutes(log) {
+  return validRestMs(log.warmupMs) ? Math.max(1, Math.round(log.warmupMs / 60000)) : null;
 }
 
 const CHART_DEFS = [
@@ -201,7 +205,7 @@ export const AnalyticsView = {
 
     const hasEnough = computed(() => allLogs.value.length >= 2);
 
-    return { loading, hasEnough, exercises, selExId, chartTab, allLogs, expandedLog, CHART_DEFS, renderChart, sessionMinutes };
+    return { loading, hasEnough, exercises, selExId, chartTab, allLogs, expandedLog, CHART_DEFS, renderChart, sessionMinutes, warmupMinutes };
   },
   template: `
     <div class="main-content">
@@ -250,7 +254,7 @@ export const AnalyticsView = {
           <div class="log-header" @click="expandedLog = expandedLog===log.id ? null : log.id">
             <div>
               <p class="log-date">{{ new Date(log.startedAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) }}</p>
-              <p class="log-meta">{{ sessionMinutes(log) ? sessionMinutes(log) + ' min · ' : '' }}{{ (log.exerciseLogs||[]).length }} exercises</p>
+              <p class="log-meta">{{ sessionMinutes(log) ? sessionMinutes(log) + ' min · ' : '' }}{{ (log.exerciseLogs||[]).length }} exercises{{ warmupMinutes(log) != null ? ' · ' + warmupMinutes(log) + ' min warm-up' : '' }}</p>
             </div>
             <span style="color:var(--text-muted); font-size:18px;">{{ expandedLog===log.id ? '▲' : '▼' }}</span>
           </div>

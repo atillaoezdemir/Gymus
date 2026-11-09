@@ -17,6 +17,9 @@ function genId() {
 // Reopening a session after this much inactivity pauses the clock for the gap
 const STALE_SESSION_MS = 60 * 60 * 1000;
 
+// Phases that are restored when the Session tab is reopened mid-session
+const RESUMABLE_PHASES = ['break', 'in-set', 'data-entry', 'post-set'];
+
 function fmt2(n) { return String(n).padStart(2, '0'); }
 function fmtSecs(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -144,11 +147,15 @@ export const ActiveSessionView = {
     // ── Timer helpers ──────────────────────────────────────────────────────────
     function tickSession() { sessionSecs.value = Math.floor((Date.now() - sessionStart - pausedMs) / 1000); }
     function tickPhase() { phaseSecs.value = Math.floor((Date.now() - phaseStart) / 1000); }
-    function resetPhase() { 
-      phaseStart = Date.now(); 
-      phaseSecs.value = 0; 
-      localStorage.setItem('gymus_phase_start', phaseStart.toString());
+    function resetPhase() {
+      phaseStart = Date.now();
+      phaseSecs.value = 0;
+      try { localStorage.setItem('gymus_phase_start', phaseStart.toString()); } catch {}
     }
+
+    // Nothing logged yet → the current break is the warm-up
+    const isWarmup = computed(() =>
+      phase.value === 'break' && Object.values(completedSets.value).every(sets => !sets?.length));
 
     function startTimers() {
       sessionTimer = setInterval(tickSession, 500);
@@ -161,9 +168,12 @@ export const ActiveSessionView = {
       const log = sessionLog.value;
       if (!log) return false;
       // Every Ready/Done/set writes gymus_phase_start, so it marks the last interaction
+      let lsPhaseStart = 0;
+      try { lsPhaseStart = parseInt(localStorage.getItem('gymus_phase_start'), 10) || 0; } catch {}
       const lastActive = Math.max(
         new Date(log.lastActiveAt || log.startedAt).getTime(),
-        parseInt(localStorage.getItem('gymus_phase_start'), 10) || 0
+        log.ui?.phaseStartedAt || 0,
+        lsPhaseStart
       );
       const idleMs = Date.now() - lastActive;
       if (idleMs <= STALE_SESSION_MS) return false;
@@ -225,20 +235,33 @@ export const ActiveSessionView = {
           completedSets.value[el.exerciseId] = el.sets || [];
           notes.value[el.exerciseId] = el.note || '';
         }
-        // Find first incomplete exercise
-        const incomplete = exercises.value.findIndex(ex => {
-          const done = (completedSets.value[ex.id] || []).length;
-          return done < (ex.defaultSets || 3);
-        });
-        exIdx.value = incomplete >= 0 ? incomplete : 0;
-        phase.value = 'break';
-        const savedPhaseStart = localStorage.getItem('gymus_phase_start');
+        const ui = sessionLog.value.ui;
+        if (ui && exercises.value[ui.exIdx]) {
+          // Resume exactly where the user left off (tab switch, reload)
+          exIdx.value = ui.exIdx;
+          phase.value = RESUMABLE_PHASES.includes(ui.phase) ? ui.phase : 'break';
+          lastSetDurationMs = ui.lastSetDurationMs || 0;
+          phaseStart = ui.phaseStartedAt || Date.now();
+        } else {
+          // Legacy log without UI state: first incomplete exercise, in break
+          const incomplete = exercises.value.findIndex(ex => {
+            const done = (completedSets.value[ex.id] || []).length;
+            return done < (ex.defaultSets || 3);
+          });
+          exIdx.value = incomplete >= 0 ? incomplete : 0;
+          phase.value = 'break';
+          let saved = null;
+          try { saved = localStorage.getItem('gymus_phase_start'); } catch {}
+          phaseStart = parseInt(saved, 10) || Date.now();
+        }
         if (stale) {
+          // Idle gap was excluded from the session clock; don't count it as an
+          // in-progress set either
+          if (phase.value === 'in-set') phase.value = 'break';
           resetPhase();
           await persist();
-        } else if (savedPhaseStart) {
-          phaseStart = parseInt(savedPhaseStart, 10) || Date.now();
         }
+        tickPhase();
       } else {
         // New session
         sessionLog.value = {
@@ -252,9 +275,11 @@ export const ActiveSessionView = {
           totalDuration: null,
           skipped: false,
           evaluation: {},
+          warmupMs: null,
           exerciseLogs: []
         };
-        await patchAppState({ activeSessionLog: sessionLog.value });
+        resetPhase();
+        await persist();
       }
 
       // Load note defaults from prev session
@@ -266,6 +291,11 @@ export const ActiveSessionView = {
       }
 
       await loadDrumDefaults(curEx.value?.id, curSetNum.value);
+      if (phase.value === 'post-set') {
+        // Post-set card shows the set just logged
+        const last = curSets.value[curSets.value.length - 1];
+        if (last && !last.skipped) { drumMass.value = last.weight; drumReps.value = last.reps; drumRpe.value = last.rpe; }
+      }
       startTimers();
     });
 
@@ -284,6 +314,7 @@ export const ActiveSessionView = {
         sets: plain(completedSets.value[ex.id] || [])
       }));
       sessionLog.value.exerciseLogs = exerciseLogs;
+      sessionLog.value.ui = { phase: phase.value, exIdx: exIdx.value, phaseStartedAt: phaseStart, lastSetDurationMs };
       sessionLog.value.lastActiveAt = new Date().toISOString();
       await patchAppState({ activeSessionLog: plain(sessionLog.value) });
     }
@@ -297,6 +328,7 @@ export const ActiveSessionView = {
       // Use exercises.value[idx] directly — curEx computed may lag one tick
       const ex = exercises.value[idx];
       if (ex) await loadDrumDefaults(ex.id, (completedSets.value[ex.id] || []).length);
+      await persist();
     }
 
     // ── Set controls ───────────────────────────────────────────────────────────
@@ -304,30 +336,31 @@ export const ActiveSessionView = {
       // Break between sets of the same exercise belongs to the previous set
       const last = curSets.value[curSets.value.length - 1];
       const restMs = Math.round(phaseSecs.value * 1000);
+      if (isWarmup.value && sessionLog.value.warmupMs == null) sessionLog.value.warmupMs = restMs;
       phase.value = 'in-set';
       resetPhase();
-      if (last && !last.skipped && !last.restDurationMs) {
-        last.restDurationMs = restMs;
-        await persist();
-      }
+      if (last && !last.skipped && !last.restDurationMs) last.restDurationMs = restMs;
+      await persist();
     }
 
-    function onDone() {
+    async function onDone() {
       lastSetDurationMs = Math.round(phaseSecs.value * 1000);
       phase.value = 'data-entry';
       dataCard.value = 0;
       resetPhase();
+      await persist();
     }
 
     async function onSkipSet() {
       const setNum = curSetNum.value + 1;
+      let restMs = Math.round(phaseSecs.value * 1000);
+      if (isWarmup.value && sessionLog.value.warmupMs == null) { sessionLog.value.warmupMs = restMs; restMs = 0; }
       const setObj = {
         setNumber: setNum, skipped: true, weight: 0, reps: 0, rpe: 0,
-        setDurationMs: 0, restDurationMs: Math.round(phaseSecs.value * 1000)
+        setDurationMs: 0, restDurationMs: restMs
       };
       if (!completedSets.value[curEx.value.id]) completedSets.value[curEx.value.id] = [];
       completedSets.value[curEx.value.id].push(setObj);
-      await persist();
 
       if (curEx.value.type === 'main' && curSetNum.value < (curEx.value.defaultSets || 3)) {
         phase.value = 'break';
@@ -336,6 +369,7 @@ export const ActiveSessionView = {
       } else {
         phase.value = 'post-set';
       }
+      await persist();
     }
 
     async function confirmDataCard() {
@@ -357,14 +391,13 @@ export const ActiveSessionView = {
         if (!completedSets.value[exerciseId]) completedSets.value[exerciseId] = [];
         completedSets.value[exerciseId].push(setObj);
 
-        await persist();
-
         if (curSetNum.value < (curEx.value.defaultSets || 3)) {
           phase.value = 'break';
           await loadDrumDefaults(exerciseId, curSetNum.value);
         } else {
           phase.value = 'post-set';
         }
+        await persist();
       }
     }
 
@@ -373,6 +406,7 @@ export const ActiveSessionView = {
       phase.value = 'break';
       resetPhase();
       await loadDrumDefaults(curEx.value?.id, curSetNum.value);
+      await persist();
     }
 
     async function nextExercise() {
@@ -383,12 +417,13 @@ export const ActiveSessionView = {
       if (last && !last.restDurationMs) last.restDurationMs = Math.round(phaseSecs.value * 1000);
       phase.value = 'break';
       resetPhase();
-      await persist();
 
       if (exIdx.value < exercises.value.length - 1) {
         exIdx.value++;
         await loadDrumDefaults(curEx.value?.id, curSetNum.value);
+        await persist();
       } else {
+        await persist();
         // All exercises done
         askEndSession();
       }
@@ -468,8 +503,9 @@ export const ActiveSessionView = {
 
     async function saveAndFinish() {
       const durationMin = Math.round(sessionSecs.value / 60);
+      const { ui, ...logData } = sessionLog.value;
       const finalLog = plain({
-        ...sessionLog.value,
+        ...logData,
         endedAt: new Date().toISOString(),
         totalDuration: durationMin,
         evaluation: { ...evalAnswers, notes: evalNotes.value },
@@ -504,7 +540,7 @@ export const ActiveSessionView = {
 
     return {
       phase, dataCard, exIdx, showExList, exercises, curEx, curSets, curSetNum, totalSets,
-      sessionSecs, phaseSecs, fmtSecs,
+      sessionSecs, phaseSecs, fmtSecs, isWarmup,
       drumMass, drumReps, drumRpe, prevSetData,
       notes, completedSets,
       showEndOverlay, showEndEvalOverlay, showNotesStep,
@@ -609,7 +645,7 @@ export const ActiveSessionView = {
           <span class="timer-value">{{ fmtSecs(sessionSecs) }}</span>
         </div>
         <div class="timer-block">
-          <span class="timer-label">{{ phase==='break' ? 'Break' : 'Exercise' }}</span>
+          <span class="timer-label">{{ isWarmup ? 'Warm-up' : phase==='break' ? 'Break' : 'Exercise' }}</span>
           <span class="timer-value">{{ fmtSecs(phaseSecs) }}</span>
         </div>
         <button class="btn btn-sm btn-ghost" style="width:auto; padding:8px 12px; font-size:13px;" @click="askEndSession">End</button>
@@ -708,12 +744,8 @@ export const SessionView = {
   emits: ['session-done', 'go-setup', 'refresh'],
   components: { NoProgramView, PreSessionView, ActiveSessionView },
   setup(props, { emit }) {
-    const active = ref(false);
-
-    // Check for in-progress session on mount
-    onMounted(async () => {
-      if (props.appState?.activeSessionLog) active.value = true;
-    });
+    // An in-progress session always takes over the Session tab
+    const active = ref(!!props.appState?.activeSessionLog);
 
     const curTemplate = computed(() => {
       if (!props.templates?.length) return null;

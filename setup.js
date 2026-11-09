@@ -19,6 +19,7 @@ function blankExercise() {
 
 // ── Import / Export ───────────────────────────────────────────────────────────
 export const ImportExportView = {
+  props: { activeTemplateId: { type: Number, default: null } },
   setup() {
     const status = ref('');
     async function doExport() {
@@ -65,7 +66,11 @@ export const ImportExportView = {
       <p class="section-title">Import / Export</p>
       <p class="text-sm text-secondary mb-4">Back up or restore all your training data.</p>
       <button class="btn btn-primary mb-3" @click="doExport">⬇ Export JSON backup</button>
-      <label class="btn btn-outline" style="cursor:pointer;">
+      <div v-if="activeTemplateId != null" class="card mb-4" style="border-color:var(--accent); background:var(--bg-card-alt); padding:14px 16px;">
+        <p class="text-sm" style="font-weight:600; margin-bottom:2px;">Session in progress</p>
+        <p class="text-xs text-secondary" style="line-height:1.45;">Importing replaces all data, including the session you're doing now. Finish it first.</p>
+      </div>
+      <label v-else class="btn btn-outline" style="cursor:pointer;">
         ⬆ Import JSON
         <input type="file" accept=".json" style="display:none" @change="doImport">
       </label>
@@ -395,7 +400,7 @@ export const ConfigureCycleView = {
 
 // ── Edit Existing Programme ───────────────────────────────────────────────────
 export const EditProgrammeView = {
-  props: { program: Object, templates: Array },
+  props: { program: Object, templates: Array, activeTemplateId: { type: Number, default: null } },
   emits: ['deleted', 'refresh'],
   components: { DrumPicker },
   setup(props, { emit }) {
@@ -430,7 +435,12 @@ export const EditProgrammeView = {
           <p class="section-title" style="margin-bottom:2px;">{{ program.name }}</p>
           <p class="text-sm text-secondary">{{ program.sessionCount }} sessions per cycle</p>
         </div>
-        <button class="btn btn-sm btn-danger" style="width:auto;" @click="confirmDelete=true">Delete</button>
+        <button class="btn btn-sm btn-danger" style="width:auto;" :disabled="activeTemplateId != null" @click="confirmDelete=true">Delete</button>
+      </div>
+
+      <div v-if="activeTemplateId != null" class="card mb-4" style="border-color:var(--accent); background:var(--bg-card-alt); padding:14px 16px;">
+        <p class="text-sm" style="font-weight:600; margin-bottom:2px;">Session in progress</p>
+        <p class="text-xs text-secondary" style="line-height:1.45;">The session you're doing now can't be edited and the programme can't be deleted until you finish it. Other sessions can still be edited.</p>
       </div>
 
       <div v-if="confirmDelete" class="card mb-4" style="border-color:var(--danger); background:var(--danger-light);">
@@ -449,7 +459,8 @@ export const EditProgrammeView = {
               <p style="font-weight:700; font-size:16px;">{{ tpl.name }}</p>
               <p class="text-xs text-secondary mt-1">{{ tpl.exercises?.length || 0 }} exercises</p>
             </div>
-            <button class="btn btn-sm btn-outline" style="width:auto;" @click="startEditTpl(tpl)">Edit</button>
+            <span v-if="tpl.id === activeTemplateId" class="text-xs text-muted" style="font-weight:600;">In progress</span>
+            <button v-else class="btn btn-sm btn-outline" style="width:auto;" @click="startEditTpl(tpl)">Edit</button>
           </div>
         </div>
       </div>
@@ -482,7 +493,7 @@ export const EditProgrammeView = {
 
 // ── Setup Root ────────────────────────────────────────────────────────────────
 export const SetupView = {
-  props: { program: Object, templates: Array },
+  props: { program: Object, templates: Array, activeTemplateId: { type: Number, default: null } },
   emits: ['saved', 'refresh'],
   components: { ConfigureCycleView, EditProgrammeView, ImportExportView },
   setup(props, { emit }) {
@@ -505,8 +516,8 @@ export const SetupView = {
 
       <transition name="fade" mode="out-in">
         <ConfigureCycleView v-if="tab==='configure'" key="cfg" @saved="onSaved" />
-        <EditProgrammeView  v-else-if="tab==='edit'" key="edit" :program="program" :templates="templates" @deleted="onDeleted" @refresh="onRefresh" />
-        <ImportExportView   v-else key="export" />
+        <EditProgrammeView  v-else-if="tab==='edit'" key="edit" :program="program" :templates="templates" :active-template-id="activeTemplateId" @deleted="onDeleted" @refresh="onRefresh" />
+        <ImportExportView   v-else key="export" :active-template-id="activeTemplateId" />
       </transition>
     </div>
   `
