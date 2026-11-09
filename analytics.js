@@ -139,33 +139,6 @@ const hoverLine = {
 // Breaks longer than this are drawn dashed and labelled on date-axis charts
 const GAP_DAYS = 21;
 
-// Writes "N-day break" over long gaps so time off is visible, not hidden
-const gapLabel = {
-  id: 'gapLabel',
-  afterDatasetsDraw(chart) {
-    const pts = chart.getDatasetMeta(0)?.data || [];
-    const raw = chart.data.datasets[0]?.data || [];
-    const { ctx, chartArea: { top } } = chart;
-    ctx.save();
-    ctx.font = `600 10px ${FONT}`;
-    ctx.fillStyle = '#9A958F';
-    ctx.textAlign = 'center';
-    let lastRight = -Infinity;
-    for (let i = 1; i < raw.length; i++) {
-      const days = Math.round((raw[i].x - raw[i - 1].x) / DAY_MS);
-      if (days <= GAP_DAYS) continue;
-      const x = (pts[i - 1].x + pts[i].x) / 2;
-      const text = `${days}-day break`;
-      const w = ctx.measureText(text).width;
-      // Skip labels that would collide with the previous one or don't fit the gap
-      if (x - w / 2 < lastRight + 6 || pts[i].x - pts[i - 1].x < w * 0.6) continue;
-      ctx.fillText(text, x, top + 12);
-      lastRight = x + w / 2;
-    }
-    ctx.restore();
-  }
-};
-
 // Calendar-aligned ticks (days, weeks or month starts) for a ms range
 function dateTicks(min, max) {
   const span = (max - min) / DAY_MS;
@@ -226,11 +199,12 @@ const compact = lines => (lines || []).filter(Boolean);
 
 // Line chart over a list of "points" (session summaries or exercise entries).
 // Tooltip callbacks read the full point, so they show context beyond the value.
-function lineConfig({ points, metric }) {
+function lineConfig({ points, metric, gaps = true }) {
   const color = metric.color;
   const unit = metric.unit ? ' ' + metric.unit : '';
   const xs = points.map(p => new Date(p.date).getTime());
-  const longGap = c => c.p1.parsed.x - c.p0.parsed.x > GAP_DAYS * DAY_MS;
+  // Breaks only mean something between individual sessions, not fixed buckets
+  const longGap = c => gaps && c.p1.parsed.x - c.p0.parsed.x > GAP_DAYS * DAY_MS;
   return {
     type: 'line',
     data: {
@@ -268,13 +242,20 @@ function lineConfig({ points, metric }) {
           callbacks: {
             title: items => metric.title(points[items[0].dataIndex]),
             label: item => `${metric.label}: ${fmtNum(item.parsed.y, metric.decimals || 0)}${unit}`,
-            footer: items => compact(metric.footer?.(points[items[0].dataIndex])),
+            footer: items => {
+              const i = items[0].dataIndex;
+              const gap = gaps && i > 0 ? Math.round((xs[i] - xs[i - 1]) / DAY_MS) : 0;
+              return compact([
+                ...(metric.footer?.(points[i]) || []),
+                gap > GAP_DAYS && `After a ${gap}-day break`,
+              ]);
+            },
           }
         }
       },
       scales: axes({ yUnit: metric.unit, decimals: metric.decimals || 0, xDates: xs }),
     },
-    plugins: [hoverLine, gapLabel],
+    plugins: [hoverLine],
   };
 }
 
@@ -304,29 +285,96 @@ function scatterConfig({ pts, color, xTitle, yTitle, label, footer }) {
 }
 
 // ── Metric definitions ────────────────────────────────────────────────────────
-const sessionTitle = s => `${s.name} · ${fmtLongDate(s.date)}`;
-const outOf10 = v => v != null ? `${v}/10` : '–';
+const outOf10 = v => v != null ? `${fmtNum(v, Number.isInteger(v) ? 0 : 1)}/10` : '–';
+
+// ── Grouping by day / week / month ──────────────────────────────────────────
+const startOfDay = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+const startOfWeek = d => { const x = startOfDay(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };  // Monday
+const startOfMonth = d => { const x = startOfDay(d); x.setDate(1); return x; };
+
+const GROUPINGS = [
+  { key: 'day', label: 'Day', start: startOfDay, minSpanDays: 0,
+    next: d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1),
+    title: g => g.count === 1 ? `${g.sessions[0].name} · ${fmtLongDate(g.date)}` : `${g.count} sessions · ${fmtLongDate(g.date)}` },
+  { key: 'week', label: 'Week', start: startOfWeek, minSpanDays: 14,
+    next: d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7),
+    title: g => `Week of ${fmtLongDate(g.date)}` },
+  { key: 'month', label: 'Month', start: startOfMonth, minSpanDays: 60,
+    next: d => new Date(d.getFullYear(), d.getMonth() + 1, 1),
+    title: g => g.date.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) },
+];
+
+const EV_KEYS = ['overallSessionRpe', 'sessionEnjoyment', 'energyLevel', 'bodyRecovery', 'overallMuscleSoreness',
+  'jointComfort', 'preWorkoutNutrition', 'mentalFocus', 'preWorkoutStress', 'sleepQuality', 'sleepTime'];
+
+// One summary-shaped record per bucket: totals add up, survey scores average.
+// Week/month buckets with no training stay in as zero points so breaks show.
+function groupSessions(list, grouping) {
+  if (!list.length) return [];
+  const byKey = new Map();
+  for (const s of list) {
+    const k = grouping.start(s.date).getTime();
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(s);
+  }
+  const keys = [];
+  if (grouping.key === 'day') keys.push(...byKey.keys());
+  else {
+    // Fill empty past buckets; the current one only counts once it has training
+    const current = grouping.start(new Date()).getTime();
+    for (let d = grouping.start(list[0].date); d.getTime() <= current; d = grouping.next(d)) {
+      if (d.getTime() < current || byKey.has(d.getTime())) keys.push(d.getTime());
+    }
+  }
+  const currentKey = grouping.start(new Date()).getTime();
+
+  return keys.map(k => {
+    const ss = byKey.get(k) || [];
+    const minutes = ss.map(x => x.minutes).filter(Boolean);
+    const warm = ss.map(x => x.warmupMin).filter(v => v != null);
+    const g = {
+      date: new Date(k), sessions: ss, count: ss.length,
+      performedCount: new Set(ss.flatMap(x => x.exercises.filter(e => e.work.length).map(e => e.exerciseId))).size,
+      sets: sum(ss.map(x => x.sets)),
+      reps: sum(ss.map(x => x.reps)),
+      volume: sum(ss.map(x => x.volume)),
+      avgRpe: mean(ss.flatMap(x => x.exercises.flatMap(e => e.work.map(w => w.rpe)))),
+      minutes: minutes.length ? sum(minutes) : (ss.length ? null : 0),
+      warmupMin: warm.length ? Math.round(mean(warm)) : null,
+      ev: Object.fromEntries(EV_KEYS.map(key => [key, mean(ss.map(x => x.ev[key]))])),
+      readiness: mean(ss.map(x => x.readiness)),
+      mental: mean(ss.map(x => x.mental)),
+    };
+    g.title = grouping.title(g) + (grouping.key !== 'day' && k === currentKey ? ' · so far' : '');
+    return g;
+  });
+}
+
+const groupTitle = g => g.title;
+// "3 sessions" / "No training" for buckets that aren't a single session
+const countLine = g => g.count === 0 ? 'No training' : g.count > 1 ? `${g.count} sessions` : null;
+const ifTrained = (g, lines) => g.count ? lines : [];
 
 const OVERVIEW_METRICS = [
-  { key: 'volume', label: 'Volume', unit: 'kg', color: '#7D9B76', value: s => s.volume, title: sessionTitle,
-    footer: s => [`${s.sets} working sets · ${fmtNum(s.reps)} reps`, `${s.performedCount} exercises`] },
-  { key: 'sets', label: 'Working sets', color: '#6A9BC5', value: s => s.sets, title: sessionTitle,
-    footer: s => [`${fmtNum(s.volume)} kg volume`, s.avgRpe != null && `Avg set RPE ${fmtNum(s.avgRpe, 1)}`] },
-  { key: 'duration', label: 'Duration', unit: 'min', color: '#A89070', value: s => s.minutes, title: sessionTitle,
-    footer: s => [s.warmupMin != null && `Warm-up ${s.warmupMin} min`, s.minutes && `Density ${fmtNum(s.volume / s.minutes)} kg/min`] },
-  { key: 'rpe', label: 'Session RPE', decimals: 1, color: '#C07A6A', value: s => s.ev.overallSessionRpe, title: sessionTitle,
-    footer: s => [s.avgRpe != null && `Avg set RPE ${fmtNum(s.avgRpe, 1)}`, s.ev.sessionEnjoyment != null && `Enjoyment ${outOf10(s.ev.sessionEnjoyment)}`] },
-  { key: 'readiness', label: 'Readiness', decimals: 1, color: '#9B7DC0', value: s => s.readiness, title: sessionTitle,
-    footer: s => [
-      `Energy ${outOf10(s.ev.energyLevel)} · Recovery ${outOf10(s.ev.bodyRecovery)}`,
-      `Soreness ${outOf10(s.ev.overallMuscleSoreness)} · Joints ${outOf10(s.ev.jointComfort)}`,
-      `Nutrition ${outOf10(s.ev.preWorkoutNutrition)}`] },
-  { key: 'mental', label: 'Mental', decimals: 1, color: '#B8A04A', value: s => s.mental, title: sessionTitle,
-    footer: s => [
-      `Focus ${outOf10(s.ev.mentalFocus)} · Enjoyment ${outOf10(s.ev.sessionEnjoyment)}`,
-      `Stress ${outOf10(s.ev.preWorkoutStress)} · Sleep quality ${outOf10(s.ev.sleepQuality)}`] },
-  { key: 'sleep', label: 'Sleep', unit: 'h', decimals: 1, color: '#5E8C9B', value: s => s.ev.sleepTime, title: sessionTitle,
-    footer: s => [s.ev.sleepQuality != null && `Quality ${outOf10(s.ev.sleepQuality)}`] },
+  { key: 'volume', label: 'Volume', unit: 'kg', color: '#7D9B76', value: g => g.volume, title: groupTitle,
+    footer: g => [countLine(g), ...ifTrained(g, [`${g.sets} working sets · ${fmtNum(g.reps)} reps`, `${g.performedCount} exercises`])] },
+  { key: 'sets', label: 'Working sets', color: '#6A9BC5', value: g => g.sets, title: groupTitle,
+    footer: g => [countLine(g), ...ifTrained(g, [`${fmtNum(g.volume)} kg volume`, g.avgRpe != null && `Avg set RPE ${fmtNum(g.avgRpe, 1)}`])] },
+  { key: 'duration', label: 'Duration', unit: 'min', color: '#A89070', value: g => g.minutes, title: groupTitle,
+    footer: g => [countLine(g), ...ifTrained(g, [g.warmupMin != null && `Warm-up ${g.warmupMin} min${g.count > 1 ? ' avg' : ''}`, g.minutes && `Density ${fmtNum(g.volume / g.minutes)} kg/min`])] },
+  { key: 'rpe', label: 'Session RPE', decimals: 1, color: '#C07A6A', value: g => g.ev.overallSessionRpe, title: groupTitle,
+    footer: g => [countLine(g), g.avgRpe != null && `Avg set RPE ${fmtNum(g.avgRpe, 1)}`, g.ev.sessionEnjoyment != null && `Enjoyment ${outOf10(g.ev.sessionEnjoyment)}`] },
+  { key: 'readiness', label: 'Readiness', decimals: 1, color: '#9B7DC0', value: g => g.readiness, title: groupTitle,
+    footer: g => [countLine(g), ...ifTrained(g, [
+      `Energy ${outOf10(g.ev.energyLevel)} · Recovery ${outOf10(g.ev.bodyRecovery)}`,
+      `Soreness ${outOf10(g.ev.overallMuscleSoreness)} · Joints ${outOf10(g.ev.jointComfort)}`,
+      `Nutrition ${outOf10(g.ev.preWorkoutNutrition)}`])] },
+  { key: 'mental', label: 'Mental', decimals: 1, color: '#B8A04A', value: g => g.mental, title: groupTitle,
+    footer: g => [countLine(g), ...ifTrained(g, [
+      `Focus ${outOf10(g.ev.mentalFocus)} · Enjoyment ${outOf10(g.ev.sessionEnjoyment)}`,
+      `Stress ${outOf10(g.ev.preWorkoutStress)} · Sleep quality ${outOf10(g.ev.sleepQuality)}`])] },
+  { key: 'sleep', label: 'Sleep', unit: 'h', decimals: 1, color: '#5E8C9B', value: g => g.ev.sleepTime, title: groupTitle,
+    footer: g => [countLine(g), g.ev.sleepQuality != null && `Quality ${outOf10(g.ev.sleepQuality)}`] },
 ];
 
 const exTitle = p => `${p.session} · ${fmtLongDate(p.date)}`;
@@ -350,6 +398,7 @@ const SECTIONS = [
   { key: 'history',   label: 'History' },
 ];
 const SECTION_KEY = 'gymus_analytics_section';
+const GROUP_KEY = 'gymus_analytics_group';
 
 // ── View ──────────────────────────────────────────────────────────────────────
 export const AnalyticsView = {
@@ -360,11 +409,15 @@ export const AnalyticsView = {
     try { initialSection = localStorage.getItem(SECTION_KEY) || 'overview'; } catch {}
     const section = ref(SECTIONS.some(s => s.key === initialSection) ? initialSection : 'overview');
     const overviewMetric = ref('volume');
+    let initialGroup = 'day';
+    try { initialGroup = localStorage.getItem(GROUP_KEY) || 'day'; } catch {}
+    const groupBy = ref(initialGroup);
     const exMetric = ref('volume');
     const selExId = ref(null);
     const expanded = ref(null);
 
     watch(section, v => { try { localStorage.setItem(SECTION_KEY, v); } catch {} });
+    watch(groupBy, v => { try { localStorage.setItem(GROUP_KEY, v); } catch {} });
 
     // Sessions with no working set (opened and ended) would distort every trend
     const trained = computed(() => sessions.value.filter(s => !s.empty));
@@ -388,6 +441,15 @@ export const AnalyticsView = {
     });
 
     const lastSession = computed(() => history.value.find(s => !s.empty) || null);
+
+    // Week/Month only appear once the data spans enough time to compare
+    const groupings = computed(() => {
+      const t = trained.value;
+      const span = t.length ? (t[t.length - 1].date - t[0].date) / DAY_MS : 0;
+      return GROUPINGS.filter(g => span >= g.minSpanDays);
+    });
+    const activeGrouping = computed(() => groupings.value.find(g => g.key === groupBy.value) || GROUPINGS[0]);
+    const overviewPoints = computed(() => groupSessions(trained.value, activeGrouping.value));
 
     function openInHistory(id) {
       expanded.value = id;
@@ -443,7 +505,7 @@ export const AnalyticsView = {
       if (canvas) charts[id] = new Chart(canvas, config);
     }
 
-    const overviewHasData = computed(() => trained.value.length >= 2);
+    const overviewHasData = computed(() => overviewPoints.value.length >= 2);
     const exHasData = computed(() => exPoints.value.length >= 1);
 
     function render() {
@@ -453,7 +515,7 @@ export const AnalyticsView = {
         if (loading.value) return;
         if (section.value === 'overview' && overviewHasData.value) {
           const metric = OVERVIEW_METRICS.find(m => m.key === overviewMetric.value);
-          draw('ov-chart', lineConfig({ points: trained.value, metric }));
+          draw('ov-chart', lineConfig({ points: overviewPoints.value, metric, gaps: activeGrouping.value.key === 'day' }));
         }
         if (section.value === 'exercises' && exHasData.value) {
           const metric = EXERCISE_METRICS.find(m => m.key === exMetric.value);
@@ -474,7 +536,7 @@ export const AnalyticsView = {
       });
     }
 
-    watch([section, overviewMetric, exMetric, selExId, loading], render);
+    watch([section, overviewMetric, activeGrouping, exMetric, selExId, loading], render);
     onMounted(load);
     onUnmounted(destroyCharts);
 
@@ -483,7 +545,7 @@ export const AnalyticsView = {
     return {
       loading, sessions, history, section, SECTIONS,
       periodStats, lastSession, openInHistory,
-      OVERVIEW_METRICS, overviewMetric, overviewHasData,
+      OVERVIEW_METRICS, overviewMetric, overviewHasData, groupings, activeGrouping, groupBy,
       EXERCISE_METRICS, exMetric, exercises, selExId, exStats, exHasData,
       expanded, toggle, fmtNum, fmtLongDate, fmtDate,
     };
@@ -513,7 +575,7 @@ export const AnalyticsView = {
               <p class="stat-label">{{ t.label }}</p>
               <p class="stat-value">{{ t.value }}<span v-if="t.unit" class="stat-unit">{{ t.unit }}</span></p>
               <p v-if="t.delta != null" :class="['stat-delta', t.good === null || t.delta === 0 ? '' : ((t.delta > 0) === t.good ? 'up' : 'down')]">
-                {{ t.delta > 0 ? '▲' : t.delta < 0 ? '▼' : '' }} {{ Math.abs(t.delta) }}% vs prev. 30d
+                {{ t.delta > 0 ? '▲' : t.delta < 0 ? '▼' : '' }} {{ Math.abs(t.delta) }}% vs the month before
               </p>
               <p v-else-if="t.sub" class="stat-delta">{{ t.sub }}</p>
             </div>
@@ -524,6 +586,10 @@ export const AnalyticsView = {
               :class="['chart-tab', overviewMetric===m.key ? 'active' : '']" @click="overviewMetric=m.key">{{ m.label }}</button>
           </div>
           <div class="card mb-4" style="padding:16px;">
+            <div v-if="groupings.length > 1" class="seg seg--sm" role="tablist" aria-label="Group by">
+              <button v-for="g in groupings" :key="g.key" role="tab" :aria-selected="activeGrouping.key===g.key"
+                :class="['seg-btn', activeGrouping.key===g.key ? 'active' : '']" @click="groupBy=g.key">{{ g.label }}</button>
+            </div>
             <div style="height:240px; position:relative;">
               <canvas v-if="overviewHasData" id="ov-chart"></canvas>
               <div v-else class="chart-empty">Log at least two sessions to see trends.</div>
