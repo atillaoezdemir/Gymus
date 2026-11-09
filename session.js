@@ -109,7 +109,7 @@ export const ActiveSessionView = {
 
     // ── Resume or start fresh ──────────────────────────────────────────────────
     const sessionLog = ref(null);         // the in-progress log object
-    const prevLog = ref(null);         // last completed log for this template
+    const prevLogs = ref([]);          // completed logs for this template, newest first
 
     // Per-exercise notes (ref map)
     const notes = ref({});           // exerciseId -> string
@@ -199,16 +199,27 @@ export const ActiveSessionView = {
     });
 
     // ── Prev data helpers ──────────────────────────────────────────────────────
+    const findExLog = (log, exerciseId) => (log.exerciseLogs || []).find(e => e.exerciseId === exerciseId);
+    const wasPerformed = el => (el?.sets || []).some(s => !s.skipped);
+
+    // Most recent real (non-skipped) attempt at this set; skipped sets and
+    // exercises left out of an ended-early session fall back to older sessions
     function getPrevSetForExercise(exerciseId, setIndex) {
-      if (!prevLog.value) return null;
-      const el = (prevLog.value.exerciseLogs || []).find(e => e.exerciseId === exerciseId);
-      if (!el || !el.sets) return null;
-      return el.sets[setIndex] || null;
+      for (const log of prevLogs.value) {
+        const set = findExLog(log, exerciseId)?.sets?.[setIndex];
+        if (set && !set.skipped) return set;
+      }
+      return null;
     }
 
+    // Exercise log from the last session where it was actually performed.
+    // An empty note there is kept: the user cleared it on purpose.
     function getPrevExLog(exerciseId) {
-      if (!prevLog.value) return null;
-      return (prevLog.value.exerciseLogs || []).find(e => e.exerciseId === exerciseId) || null;
+      for (const log of prevLogs.value) {
+        const el = findExLog(log, exerciseId);
+        if (wasPerformed(el)) return el;
+      }
+      return null;
     }
 
     function loadDrumDefaults(exerciseId, setIndex) {
@@ -221,7 +232,7 @@ export const ActiveSessionView = {
 
     // ── Mount: resume or new ───────────────────────────────────────────────────
     onMounted(async () => {
-      prevLog.value = await getLastLogForTemplate(props.tpl.id);
+      prevLogs.value = (await getLogsForTemplate(props.tpl.id)).reverse();
       const aState = await getAppState();
 
       if (aState.activeSessionLog) {
@@ -323,8 +334,9 @@ export const ActiveSessionView = {
     async function goToExercise(idx) {
       exIdx.value = idx;
       showExList.value = false;
+      // Switching exercise during warm-up keeps the warm-up clock running
+      if (!isWarmup.value) resetPhase();
       phase.value = 'break';
-      resetPhase();
       // Use exercises.value[idx] directly — curEx computed may lag one tick
       const ex = exercises.value[idx];
       if (ex) await loadDrumDefaults(ex.id, (completedSets.value[ex.id] || []).length);
