@@ -708,6 +708,187 @@
       color: var(--bg);
     }
 
+    /* ── Analytics sections ── */
+    .seg {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      margin-bottom: 16px;
+      background: var(--bg-card-alt);
+      border-radius: var(--radius-sm);
+    }
+
+    .seg-btn {
+      flex: 1;
+      padding: 9px 0;
+      border-radius: 9px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      transition: background 150ms, color 150ms;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .seg-btn.active {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .stat-caption {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .stat-grid--3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .stat-tile {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      min-width: 0;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .stat-grid--3 .stat-value {
+      font-size: 19px;
+    }
+
+    .stat-unit {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-left: 3px;
+    }
+
+    .stat-delta {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stat-delta.up {
+      color: var(--accent-dark);
+    }
+
+    .stat-delta.down {
+      color: var(--danger);
+    }
+
+    .chart-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 20px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .history-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      padding: 12px 0 4px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .history-facts:empty {
+      display: none;
+    }
+
+    .history-ex {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .history-ex:last-of-type {
+      border-bottom: none;
+    }
+
+    .set-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .set-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 12px;
+      border-radius: var(--radius-xs);
+      background: var(--bg-card-alt);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .set-row-num {
+      width: 16px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .set-row-main {
+      flex: 1;
+      font-weight: 600;
+    }
+
+    .set-row-rpe {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .set-row.skipped {
+      background: transparent;
+      border: 1px dashed var(--border-strong);
+      color: var(--text-muted);
+    }
+
+    .set-row.skipped .set-row-main {
+      font-weight: 500;
+    }
+
     /* ── Log browser ── */
     .log-item {
       border-radius: var(--radius-sm);
@@ -728,7 +909,12 @@
 
     .log-date {
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 700;
+    }
+
+    .log-date-sub {
+      font-weight: 500;
+      color: var(--text-secondary);
     }
 
     .log-meta {

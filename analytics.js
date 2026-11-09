@@ -1,19 +1,35 @@
-// analytics.js — Analytics tab
+// analytics.js — Analytics tab: Overview · Exercises · History
 
-import { getAllLogs, getLogsForTemplate } from './db.js';
+import { db, getAllLogs } from './db.js';
 
 const { ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
+// ── Formatting ────────────────────────────────────────────────────────────────
+const DAY_MS = 864e5;
+
 function fmtDate(d) {
-  const dt = new Date(d);
-  return dt.toLocaleDateString('en-GB', { day:'2-digit', month:'short' });
+  return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
-
-function avgRpe(sets) {
-  const v = sets.filter(s => !s.skipped && s.rpe != null).map(s => s.rpe);
-  return v.length ? (v.reduce((a,b)=>a+b,0)/v.length) : null;
+function fmtLongDate(d) {
+  return new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 }
+function fmtNum(v, decimals = 0) {
+  if (v == null || Number.isNaN(v)) return '–';
+  return Number(v).toLocaleString('en-GB', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+function fmtMs(ms) {
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+const fmtKg = w => w == null ? '–' : Number(w).toLocaleString('en-GB', { maximumFractionDigits: 2 });
+const fmtSet = s => `${fmtKg(s.weight)} kg × ${s.reps} @ RPE ${s.rpe}`;
+const mean = arr => {
+  const v = arr.filter(x => x != null && !Number.isNaN(x));
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+};
+const sum = arr => arr.reduce((a, b) => a + (b || 0), 0);
 
+// ── Data hygiene ──────────────────────────────────────────────────────────────
 // Sessions logged before the idle-gap fix could record days of wall-clock time.
 // Anything beyond these limits is not real training time.
 const MAX_SESSION_MIN = 4 * 60;
@@ -37,243 +53,491 @@ function sessionMinutes(log) {
   return ms ? Math.round(ms / 60000) : null;
 }
 
-function warmupMinutes(log) {
-  return validRestMs(log.warmupMs) ? Math.max(1, Math.round(log.warmupMs / 60000)) : null;
+const workSets = el => (el.sets || []).filter(s => !s.skipped);
+const setVolume = s => (s.weight || 0) * (s.reps || 0);
+// Epley estimate; above ~12 reps it stops meaning much
+const e1rm = s => (s.reps > 0 && s.reps <= 12 && s.weight > 0) ? s.weight * (1 + s.reps / 30) : null;
+
+// Evaluation composites (0–10)
+function readinessScore(e) {
+  if (!e) return null;
+  return mean([e.energyLevel, e.overallMuscleSoreness, e.jointComfort, e.bodyRecovery, e.preWorkoutNutrition]);
+}
+function mentalScore(e) {
+  if (!e) return null;
+  return mean([e.mentalFocus, e.overallSessionRpe, e.sessionEnjoyment,
+    e.preWorkoutStress != null ? 10 - e.preWorkoutStress : null, e.sleepQuality]);
 }
 
-const CHART_DEFS = [
-  { key:'volume',   label:'Volume',      type:'line' },
-  { key:'maxWeight',label:'Max weight',  type:'line' },
-  { key:'reps',     label:'Reps',        type:'line' },
-  { key:'rpe',      label:'Avg RPE',     type:'line' },
-  { key:'setTime',  label:'Set time',    type:'line' },
-  { key:'restTime', label:'Rest time',   type:'line' },
-  { key:'wVsRest',  label:'W vs Rest',   type:'scatter' },
-  { key:'wVsOrder', label:'W vs Order',  type:'scatter' },
+// One derived record per logged session
+function summarize(log, nameById) {
+  // Exercises the user touched (incl. skipped sets); untouched ones are noise
+  const exercises = (log.exerciseLogs || [])
+    .filter(el => (el.sets || []).length)
+    .map(el => ({ ...el, work: workSets(el) }));
+  const performed = exercises.filter(el => el.work.length);
+  const all = performed.flatMap(el => el.work);
+  const ev = log.evaluation || {};
+  return {
+    id: log.id,
+    date: new Date(log.startedAt),
+    name: log.sessionName || nameById.get(log.templateId) || 'Session',
+    exercises,
+    performedCount: performed.length,
+    sets: all.length,
+    reps: sum(all.map(s => s.reps)),
+    volume: sum(all.map(setVolume)),
+    avgRpe: mean(all.map(s => s.rpe)),
+    minutes: sessionMinutes(log),
+    warmupMin: validRestMs(log.warmupMs) ? Math.max(1, Math.round(log.warmupMs / 60000)) : null,
+    ev,
+    readiness: readinessScore(ev),
+    mental: mentalScore(ev),
+    empty: all.length === 0,
+  };
+}
+
+// ── Chart styling ─────────────────────────────────────────────────────────────
+const FONT = 'Inter, system-ui, sans-serif';
+const TOOLTIP = {
+  backgroundColor: 'rgba(44,42,39,0.96)',
+  titleColor: '#FAF9F6',
+  bodyColor: '#F3F1EC',
+  footerColor: '#B5B0AA',
+  titleFont: { size: 12, weight: '500', family: FONT },
+  bodyFont: { size: 15, weight: '700', family: FONT },
+  footerFont: { size: 12, weight: '400', family: FONT },
+  padding: 12,
+  cornerRadius: 10,
+  caretPadding: 10,
+  displayColors: false,
+  titleMarginBottom: 6,
+  footerMarginTop: 8,
+  footerSpacing: 3,
+};
+
+// Dashed guide under the hovered point so it's clear which session is read out
+const hoverLine = {
+  id: 'hoverLine',
+  afterDatasetsDraw(chart) {
+    const active = chart.tooltip?.getActiveElements?.();
+    if (!active?.length) return;
+    const { ctx, chartArea: { top, bottom } } = chart;
+    const x = active[0].element.x;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(44,42,39,0.25)';
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+function axes({ yUnit = '', decimals = 0, xTitle, yTitle, xLinear = false }) {
+  const tick = { color: '#B5B0AA', font: { size: 11, family: FONT } };
+  const title = text => text ? { display: true, text, color: '#7A7570', font: { size: 11, weight: '600', family: FONT } } : undefined;
+  return {
+    x: {
+      type: xLinear ? 'linear' : 'category',
+      grid: { display: xLinear, color: '#F0EDE8' },
+      border: { display: false },
+      ticks: { ...tick, maxRotation: 0, autoSkipPadding: 14 },
+      title: title(xTitle),
+    },
+    y: {
+      grid: { color: '#F0EDE8' },
+      border: { display: false },
+      ticks: { ...tick, maxTicksLimit: 5, callback: v => fmtNum(v, decimals) + (yUnit ? ' ' + yUnit : '') },
+      title: title(yTitle),
+    },
+  };
+}
+
+const compact = lines => (lines || []).filter(Boolean);
+
+// Line chart over a list of "points" (session summaries or exercise entries).
+// Tooltip callbacks read the full point, so they show context beyond the value.
+function lineConfig({ points, metric }) {
+  const color = metric.color;
+  const unit = metric.unit ? ' ' + metric.unit : '';
+  return {
+    type: 'line',
+    data: {
+      labels: points.map(p => fmtDate(p.date)),
+      datasets: [{
+        data: points.map(p => { const v = metric.value(p); return v == null ? null : +v; }),
+        borderColor: color,
+        backgroundColor: color + '1F',
+        borderWidth: 2.5,
+        tension: 0.3,
+        fill: true,
+        spanGaps: true,
+        pointRadius: 4,
+        pointHoverRadius: 7,
+        pointHitRadius: 14,
+        pointBackgroundColor: color,
+        pointBorderColor: '#fff',
+        pointBorderWidth: 1.5,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 250 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...TOOLTIP,
+          callbacks: {
+            title: items => metric.title(points[items[0].dataIndex]),
+            label: item => `${metric.label}: ${fmtNum(item.parsed.y, metric.decimals || 0)}${unit}`,
+            footer: items => compact(metric.footer?.(points[items[0].dataIndex])),
+          }
+        }
+      },
+      scales: axes({ yUnit: metric.unit, decimals: metric.decimals || 0 }),
+    },
+    plugins: [hoverLine],
+  };
+}
+
+function scatterConfig({ pts, color, xTitle, yTitle, label, footer }) {
+  return {
+    type: 'scatter',
+    data: { datasets: [{ data: pts, backgroundColor: color + 'B3', pointRadius: 5, pointHoverRadius: 8, pointHitRadius: 10 }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 250 },
+      interaction: { mode: 'nearest', intersect: true },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...TOOLTIP,
+          callbacks: {
+            title: () => '',
+            label: item => label(item.raw),
+            footer: items => compact(footer(items[0].raw)),
+          }
+        }
+      },
+      scales: axes({ xTitle, yTitle, xLinear: true, yUnit: 'kg' }),
+    }
+  };
+}
+
+// ── Metric definitions ────────────────────────────────────────────────────────
+const sessionTitle = s => `${s.name} · ${fmtLongDate(s.date)}`;
+const outOf10 = v => v != null ? `${v}/10` : '–';
+
+const OVERVIEW_METRICS = [
+  { key: 'volume', label: 'Volume', unit: 'kg', color: '#7D9B76', value: s => s.volume, title: sessionTitle,
+    footer: s => [`${s.sets} working sets · ${fmtNum(s.reps)} reps`, `${s.performedCount} exercises`] },
+  { key: 'sets', label: 'Working sets', color: '#6A9BC5', value: s => s.sets, title: sessionTitle,
+    footer: s => [`${fmtNum(s.volume)} kg volume`, s.avgRpe != null && `Avg set RPE ${fmtNum(s.avgRpe, 1)}`] },
+  { key: 'duration', label: 'Duration', unit: 'min', color: '#A89070', value: s => s.minutes, title: sessionTitle,
+    footer: s => [s.warmupMin != null && `Warm-up ${s.warmupMin} min`, s.minutes && `Density ${fmtNum(s.volume / s.minutes)} kg/min`] },
+  { key: 'rpe', label: 'Session RPE', decimals: 1, color: '#C07A6A', value: s => s.ev.overallSessionRpe, title: sessionTitle,
+    footer: s => [s.avgRpe != null && `Avg set RPE ${fmtNum(s.avgRpe, 1)}`, s.ev.sessionEnjoyment != null && `Enjoyment ${outOf10(s.ev.sessionEnjoyment)}`] },
+  { key: 'readiness', label: 'Readiness', decimals: 1, color: '#9B7DC0', value: s => s.readiness, title: sessionTitle,
+    footer: s => [
+      `Energy ${outOf10(s.ev.energyLevel)} · Recovery ${outOf10(s.ev.bodyRecovery)}`,
+      `Soreness ${outOf10(s.ev.overallMuscleSoreness)} · Joints ${outOf10(s.ev.jointComfort)}`,
+      `Nutrition ${outOf10(s.ev.preWorkoutNutrition)}`] },
+  { key: 'mental', label: 'Mental', decimals: 1, color: '#B8A04A', value: s => s.mental, title: sessionTitle,
+    footer: s => [
+      `Focus ${outOf10(s.ev.mentalFocus)} · Enjoyment ${outOf10(s.ev.sessionEnjoyment)}`,
+      `Stress ${outOf10(s.ev.preWorkoutStress)} · Sleep quality ${outOf10(s.ev.sleepQuality)}`] },
+  { key: 'sleep', label: 'Sleep', unit: 'h', decimals: 1, color: '#5E8C9B', value: s => s.ev.sleepTime, title: sessionTitle,
+    footer: s => [s.ev.sleepQuality != null && `Quality ${outOf10(s.ev.sleepQuality)}`] },
 ];
 
+const exTitle = p => `${p.session} · ${fmtLongDate(p.date)}`;
+const exFooter = p => p.sets.map((s, i) => `Set ${i + 1}  ${fmtSet(s)}`);
+const avgOf = (p, f) => mean(p.sets.map(f));
+
+const EXERCISE_METRICS = [
+  { key: 'volume', label: 'Volume', unit: 'kg', color: '#7D9B76', value: p => sum(p.sets.map(setVolume)), title: exTitle, footer: exFooter },
+  { key: 'e1rm', label: 'Est. 1RM', unit: 'kg', decimals: 1, color: '#5C7A54', value: p => { const v = p.sets.map(e1rm).filter(Boolean); return v.length ? Math.max(...v) : null; }, title: exTitle, footer: exFooter },
+  { key: 'maxWeight', label: 'Top weight', unit: 'kg', decimals: 1, color: '#A89070', value: p => Math.max(...p.sets.map(s => s.weight || 0)), title: exTitle, footer: exFooter },
+  { key: 'reps', label: 'Total reps', color: '#6A9BC5', value: p => sum(p.sets.map(s => s.reps)), title: exTitle, footer: exFooter },
+  { key: 'rpe', label: 'Avg RPE', decimals: 1, color: '#C07A6A', value: p => avgOf(p, s => s.rpe), title: exTitle, footer: exFooter },
+  { key: 'setTime', label: 'Avg set time', unit: 's', color: '#9B7DC0', value: p => avgOf(p, s => validSetMs(s.setDurationMs) ? s.setDurationMs / 1000 : null), title: exTitle, footer: exFooter },
+  { key: 'restTime', label: 'Avg rest', unit: 's', color: '#B8A04A', value: p => avgOf(p, s => validRestMs(s.restDurationMs) ? s.restDurationMs / 1000 : null), title: exTitle, footer: exFooter },
+  { key: 'wVsRest', label: 'Weight vs rest', scatter: true },
+];
+
+const SECTIONS = [
+  { key: 'overview',  label: 'Overview' },
+  { key: 'exercises', label: 'Exercises' },
+  { key: 'history',   label: 'History' },
+];
+const SECTION_KEY = 'gymus_analytics_section';
+
+// ── View ──────────────────────────────────────────────────────────────────────
 export const AnalyticsView = {
   setup() {
-    const allLogs      = ref([]);
-    const exercises    = ref([]);   // { id, name } distinct list
-    const selExId      = ref(null);
-    const chartTab     = ref('volume');
-    let chartInst      = null;
-    const expandedLog  = ref(null);
-    const loading      = ref(true);
+    const loading = ref(true);
+    const sessions = ref([]);        // summaries, oldest → newest
+    let initialSection = 'overview';
+    try { initialSection = localStorage.getItem(SECTION_KEY) || 'overview'; } catch {}
+    const section = ref(SECTIONS.some(s => s.key === initialSection) ? initialSection : 'overview');
+    const overviewMetric = ref('volume');
+    const exMetric = ref('volume');
+    const selExId = ref(null);
+    const expanded = ref(null);
+
+    watch(section, v => { try { localStorage.setItem(SECTION_KEY, v); } catch {} });
+
+    // Sessions with no working set (opened and ended) would distort every trend
+    const trained = computed(() => sessions.value.filter(s => !s.empty));
+    const history = computed(() => [...sessions.value].reverse());
+
+    // ── Overview ─────────────────────────────────────────────────────────────
+    const periodStats = computed(() => {
+      const now = Date.now();
+      const inRange = (from, to) => trained.value.filter(s => s.date >= now - from * DAY_MS && s.date < now - to * DAY_MS);
+      const cur = inRange(30, 0), prev = inRange(60, 30);
+      const delta = (a, b) => (a != null && b ? Math.round(((a - b) / b) * 100) : null);
+      const avgDur = list => mean(list.map(s => s.minutes));
+      const vol = list => sum(list.map(s => s.volume));
+      const sets = list => sum(list.map(s => s.sets));
+      return [
+        { label: 'Sessions', value: fmtNum(cur.length), unit: '', sub: `${fmtNum(cur.length / (30 / 7), 1)} per week`, delta: delta(cur.length, prev.length), good: true },
+        { label: 'Volume', value: fmtNum(vol(cur)), unit: 'kg', delta: delta(vol(cur), vol(prev)), good: true },
+        { label: 'Working sets', value: fmtNum(sets(cur)), unit: '', delta: delta(sets(cur), sets(prev)), good: true },
+        { label: 'Avg duration', value: fmtNum(avgDur(cur)), unit: 'min', delta: delta(avgDur(cur), avgDur(prev)), good: null },
+      ];
+    });
+
+    const lastSession = computed(() => history.value.find(s => !s.empty) || null);
+
+    function openInHistory(id) {
+      expanded.value = id;
+      section.value = 'history';
+    }
+
+    // ── Exercises ────────────────────────────────────────────────────────────
+    // Only exercises with at least one working set; most recently trained first
+    const exercises = computed(() => {
+      const map = new Map();
+      for (const s of history.value) {
+        for (const el of s.exercises) if (el.work.length && !map.has(el.exerciseId)) map.set(el.exerciseId, el.exerciseName);
+      }
+      return [...map.entries()].map(([id, name]) => ({ id, name }));
+    });
+
+    const exPoints = computed(() => {
+      if (!selExId.value) return [];
+      const out = [];
+      for (const s of sessions.value) {
+        const el = s.exercises.find(e => e.exerciseId === selExId.value);
+        if (el?.work.length) out.push({ date: s.date, session: s.name, sets: el.work });
+      }
+      return out;
+    });
+
+    const exStats = computed(() => {
+      const all = exPoints.value.flatMap(p => p.sets.map(s => ({ ...s, date: p.date })));
+      if (!all.length) return null;
+      const best = all.reduce((a, s) => (e1rm(s) || 0) > (e1rm(a) || 0) ? s : a, all[0]);
+      const heaviest = all.reduce((a, s) => (s.weight > a.weight || (s.weight === a.weight && s.reps > a.reps)) ? s : a, all[0]);
+      return [
+        { label: 'Est. 1RM', value: e1rm(best) ? fmtNum(e1rm(best), 1) : '–', unit: 'kg', sub: e1rm(best) ? `${fmtKg(best.weight)} × ${best.reps} · ${fmtDate(best.date)}` : '' },
+        { label: 'Top set', value: fmtKg(heaviest.weight), unit: 'kg', sub: `× ${heaviest.reps} · ${fmtDate(heaviest.date)}` },
+        { label: 'Sessions', value: fmtNum(exPoints.value.length), unit: '', sub: `since ${fmtDate(exPoints.value[0].date)}` },
+      ];
+    });
 
     async function load() {
       loading.value = true;
-      allLogs.value = await getAllLogs();
-      // Build exercise list from all logs
-      const map = new Map();
-      for (const log of allLogs.value) {
-        for (const el of (log.exerciseLogs || [])) {
-          map.set(el.exerciseId, el.exerciseName);
-        }
-      }
-      exercises.value = [...map.entries()].map(([id, name]) => ({ id, name }));
-      if (exercises.value.length) selExId.value = exercises.value[0].id;
+      const [logs, templates] = await Promise.all([getAllLogs(), db.sessionTemplates.toArray()]);
+      const nameById = new Map(templates.map(t => [t.id, t.name]));
+      sessions.value = logs.map(l => summarize(l, nameById)).reverse();
+      selExId.value = exercises.value[0]?.id ?? null;
       loading.value = false;
     }
 
-    onMounted(load);
-
-    onUnmounted(() => {
-      if (chartInst) { chartInst.destroy(); chartInst = null; }
-      for (const key in sessionChartInsts) {
-        if (sessionChartInsts[key]) { sessionChartInsts[key].destroy(); sessionChartInsts[key] = null; }
-      }
-    });
-
-    // ── Compute per-exercise data ──────────────────────────────────────────────
-    const exData = computed(() => {
-      if (!selExId.value) return [];
-      const result = [];
-      for (const log of [...allLogs.value].reverse()) {
-        const el = (log.exerciseLogs || []).find(e => e.exerciseId === selExId.value);
-        if (!el) continue;
-        const mainSets = (el.sets || []).filter(s => !s.skipped);
-        if (!mainSets.length) continue;
-        result.push({ date: new Date(log.startedAt), log, el, sets: mainSets });
-      }
-      return result;
-    });
-
-    // ── Build chart data ───────────────────────────────────────────────────────
-    const chartData = computed(() => {
-      const d = exData.value;
-      if (!d.length) return null;
-      const labels = d.map(x => fmtDate(x.date));
-
-      if (chartTab.value === 'volume') {
-        return { labels, datasets:[{ label:'Volume (kg×reps)', data: d.map(x => x.sets.reduce((a,s)=>a+(s.weight||0)*(s.reps||0),0)), borderColor:'#7D9B76', backgroundColor:'rgba(125,155,118,0.15)', tension:0.3, fill:true }] };
-      }
-      if (chartTab.value === 'maxWeight') {
-        return { labels, datasets:[{ label:'Max weight (kg)', data: d.map(x => Math.max(...x.sets.map(s=>s.weight||0))), borderColor:'#A89070', backgroundColor:'rgba(168,144,112,0.15)', tension:0.3, fill:true }] };
-      }
-      if (chartTab.value === 'reps') {
-        return { labels, datasets:[{ label:'Total reps', data: d.map(x => x.sets.reduce((a,s)=>a+(s.reps||0),0)), borderColor:'#6A9BC5', backgroundColor:'rgba(106,155,197,0.15)', tension:0.3, fill:true }] };
-      }
-      if (chartTab.value === 'rpe') {
-        return { labels, datasets:[{ label:'Avg RPE', data: d.map(x => avgRpe(x.sets)), borderColor:'#C07A6A', backgroundColor:'rgba(192,122,106,0.15)', tension:0.3, fill:true }] };
-      }
-      if (chartTab.value === 'setTime') {
-        return { labels, datasets:[{ label:'Avg set time (s)', data: d.map(x => { const v=x.sets.filter(s=>validSetMs(s.setDurationMs)).map(s=>s.setDurationMs/1000); return v.length?(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1):null; }), borderColor:'#9B7DC0', backgroundColor:'rgba(155,125,192,0.15)', tension:0.3, fill:true }] };
-      }
-      if (chartTab.value === 'restTime') {
-        return { labels, datasets:[{ label:'Avg rest time (s)', data: d.map(x => { const v=x.sets.filter(s=>validRestMs(s.restDurationMs)).map(s=>s.restDurationMs/1000); return v.length?(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1):null; }), borderColor:'#B8A04A', backgroundColor:'rgba(184,160,74,0.15)', tension:0.3, fill:true }] };
-      }
-      if (chartTab.value === 'wVsRest') {
-        const pts = d.flatMap(x => x.sets.filter(s=>s.weight&&validRestMs(s.restDurationMs)).map(s=>({ x: s.restDurationMs/1000, y: s.weight })));
-        return { datasets:[{ label:'Weight vs Rest', data: pts, backgroundColor:'rgba(125,155,118,0.6)' }] };
-      }
-      if (chartTab.value === 'wVsOrder') {
-        const pts = d.flatMap((x,i)=>x.sets.map(s=>({ x:i+1, y:s.weight||0 })));
-        return { datasets:[{ label:'Weight vs Session order', data: pts, backgroundColor:'rgba(168,144,112,0.6)' }] };
-      }
-      return null;
-    });
-
-    // ── Render chart ───────────────────────────────────────────────────────────
-    function renderChart() {
-      nextTick(() => {
-        const canvas = document.getElementById('ex-chart');
-        if (!canvas || !chartData.value) return;
-        if (chartInst) { chartInst.destroy(); chartInst = null; }
-        const isScatter = ['wVsRest','wVsOrder'].includes(chartTab.value);
-        chartInst = new Chart(canvas, {
-          type: isScatter ? 'scatter' : 'line',
-          data: chartData.value,
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: { legend:{ display:false }, tooltip:{ backgroundColor:'#2C2A27', titleColor:'#FAF9F6', bodyColor:'#FAF9F6' } },
-            scales: {
-              x: { grid:{ display:false }, ticks:{ color:'#B5B0AA', font:{size:11} } },
-              y: { grid:{ color:'#F0EDE8' }, ticks:{ color:'#B5B0AA', font:{size:11} } }
-            },
-            elements: { point:{ radius:4, hoverRadius:7 } }
-          }
-        });
-      });
+    // ── Charts ───────────────────────────────────────────────────────────────
+    const charts = {};
+    function destroyCharts() { for (const k of Object.keys(charts)) { charts[k].destroy(); delete charts[k]; } }
+    function draw(id, config) {
+      const canvas = document.getElementById(id);
+      if (canvas) charts[id] = new Chart(canvas, config);
     }
 
-    watch([chartTab, selExId], renderChart);
-    watch(loading, v => { if (!v) nextTick(renderChart); });
+    const overviewHasData = computed(() => trained.value.length >= 2);
+    const exHasData = computed(() => exPoints.value.length >= 1);
 
-    // ── Session-level charts ───────────────────────────────────────────────────
-    let sessionChartInsts = {};
-    function renderSessionCharts() {
+    function render() {
+      // Charts are rebuilt on every switch; the canvas they drew on may be gone
+      destroyCharts();
       nextTick(() => {
-        const logs = [...allLogs.value].reverse();
-        const labels = logs.map(l => fmtDate(l.startedAt));
-
-        const configs = [
-          { id:'s-duration', label:'Duration (min)', data: logs.map(sessionMinutes), color:'#7D9B76' },
-          { id:'s-physical', label:'Physical score', data: logs.map(l => {
-            const e = l.evaluation;
-            if (!e) return null;
-            const vals = [e.energyLevel, e.overallMuscleSoreness, e.jointComfort, e.bodyRecovery, e.preWorkoutNutrition].filter(v=>v!=null);
-            return vals.length ? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1) : null;
-          }), color:'#A89070' },
-          { id:'s-mental', label:'Mental score', data: logs.map(l => {
-            const e = l.evaluation;
-            if (!e) return null;
-            const vals = [e.mentalFocus, e.overallSessionRpe, e.sessionEnjoyment, e.preWorkoutStress!=null?10-e.preWorkoutStress:null, e.sleepQuality].filter(v=>v!=null);
-            return vals.length ? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1) : null;
-          }), color:'#9B7DC0' },
-        ];
-
-        for (const cfg of configs) {
-          const canvas = document.getElementById(cfg.id);
-          if (!canvas) continue;
-          if (sessionChartInsts[cfg.id]) sessionChartInsts[cfg.id].destroy();
-          sessionChartInsts[cfg.id] = new Chart(canvas, {
-            type: 'line',
-            data: { labels, datasets:[{ label:cfg.label, data:cfg.data, borderColor:cfg.color, backgroundColor:cfg.color+'26', tension:0.3, fill:true }] },
-            options: {
-              responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{display:false}, tooltip:{backgroundColor:'#2C2A27',titleColor:'#FAF9F6',bodyColor:'#FAF9F6'} },
-              scales:{ x:{grid:{display:false},ticks:{color:'#B5B0AA',font:{size:11}}}, y:{grid:{color:'#F0EDE8'},ticks:{color:'#B5B0AA',font:{size:11}}} },
-              elements:{ point:{radius:4,hoverRadius:7} }
-            }
-          });
+        if (loading.value) return;
+        if (section.value === 'overview' && overviewHasData.value) {
+          const metric = OVERVIEW_METRICS.find(m => m.key === overviewMetric.value);
+          draw('ov-chart', lineConfig({ points: trained.value, metric }));
+        }
+        if (section.value === 'exercises' && exHasData.value) {
+          const metric = EXERCISE_METRICS.find(m => m.key === exMetric.value);
+          if (metric.scatter) {
+            const pts = exPoints.value.flatMap(p => p.sets
+              .map((s, i) => ({ s, n: i + 1 }))
+              .filter(({ s }) => s.weight && validRestMs(s.restDurationMs))
+              .map(({ s, n }) => ({ x: Math.round(s.restDurationMs / 1000), y: s.weight, set: s, n, date: p.date, session: p.session })));
+            draw('ex-chart', scatterConfig({
+              pts, color: '#7D9B76', xTitle: 'Rest after set (s)', yTitle: 'Weight',
+              label: r => `${fmtKg(r.y)} kg · rest ${fmtMs(r.x * 1000)}`,
+              footer: r => [`Set ${r.n}  ${fmtSet(r.set)}`, `${r.session} · ${fmtLongDate(r.date)}`],
+            }));
+          } else {
+            draw('ex-chart', lineConfig({ points: exPoints.value, metric }));
+          }
         }
       });
     }
-    watch(loading, v => { if (!v) renderSessionCharts(); });
 
-    const hasEnough = computed(() => allLogs.value.length >= 2);
+    watch([section, overviewMetric, exMetric, selExId, loading], render);
+    onMounted(load);
+    onUnmounted(destroyCharts);
 
-    return { loading, hasEnough, exercises, selExId, chartTab, allLogs, expandedLog, CHART_DEFS, renderChart, sessionMinutes, warmupMinutes };
+    function toggle(id) { expanded.value = expanded.value === id ? null : id; }
+
+    return {
+      loading, sessions, history, section, SECTIONS,
+      periodStats, lastSession, openInHistory,
+      OVERVIEW_METRICS, overviewMetric, overviewHasData,
+      EXERCISE_METRICS, exMetric, exercises, selExId, exStats, exHasData,
+      expanded, toggle, fmtNum, fmtLongDate, fmtDate,
+    };
   },
   template: `
     <div class="main-content">
       <div v-if="loading" style="text-align:center; padding:60px 0; color:var(--text-muted);">Loading…</div>
 
-      <div v-else-if="!hasEnough" style="text-align:center; padding:60px 0;">
+      <div v-else-if="!sessions.length" style="text-align:center; padding:60px 0;">
         <div style="font-size:40px; margin-bottom:16px;">📈</div>
-        <p style="font-size:18px; font-weight:600; color:var(--text-secondary);">Complete more sessions to see trends</p>
-        <p class="text-sm text-muted mt-2">You need at least 2 sessions.</p>
+        <p style="font-size:18px; font-weight:600; color:var(--text-secondary);">No sessions yet</p>
+        <p class="text-sm text-muted mt-2">Finish your first session to see your progress here.</p>
       </div>
 
-      <div v-else>
-        <!-- Exercise selector -->
-        <div class="mb-4">
-          <label class="text-xs text-secondary" style="font-weight:600; letter-spacing:1px; text-transform:uppercase;">Exercise</label>
-          <select class="input mt-1" v-model="selExId" @change="renderChart">
-            <option v-for="ex in exercises" :key="ex.id" :value="ex.id">{{ ex.name }}</option>
-          </select>
+      <template v-else>
+        <!-- Section switcher -->
+        <div class="seg" role="tablist">
+          <button v-for="s in SECTIONS" :key="s.key" role="tab" :aria-selected="section===s.key"
+            :class="['seg-btn', section===s.key ? 'active' : '']" @click="section=s.key">{{ s.label }}</button>
         </div>
 
-        <!-- Chart tabs -->
-        <div class="chart-tabs mb-3">
-          <button v-for="c in CHART_DEFS" :key="c.key"
-            :class="['chart-tab', chartTab===c.key ? 'active' : '']"
-            @click="chartTab=c.key">{{ c.label }}</button>
-        </div>
-
-        <div class="card mb-4" style="padding:16px;">
-          <div style="height:250px; position:relative;">
-            <canvas id="ex-chart"></canvas>
-          </div>
-        </div>
-
-        <!-- Session charts -->
-        <p class="section-title">Session trends</p>
-        <div v-for="sid in ['s-duration','s-physical','s-mental']" :key="sid" class="card mb-3" style="padding:16px;">
-          <p class="text-sm text-secondary mb-2" style="font-weight:600;">
-            {{ sid==='s-duration'?'Duration (min)':sid==='s-physical'?'Physical score':'Mental score' }}
-          </p>
-          <div style="height:200px; position:relative;"><canvas :id="sid"></canvas></div>
-        </div>
-
-        <!-- Log browser -->
-        <p class="section-title mt-4">Session log</p>
-        <div v-for="log in allLogs" :key="log.id" class="log-item">
-          <div class="log-header" @click="expandedLog = expandedLog===log.id ? null : log.id">
-            <div>
-              <p class="log-date">{{ new Date(log.startedAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) }}</p>
-              <p class="log-meta">{{ sessionMinutes(log) ? sessionMinutes(log) + ' min · ' : '' }}{{ (log.exerciseLogs||[]).length }} exercises{{ warmupMinutes(log) != null ? ' · ' + warmupMinutes(log) + ' min warm-up' : '' }}</p>
+        <!-- ── OVERVIEW ─────────────────────────────────────────────────── -->
+        <div v-if="section==='overview'">
+          <p class="stat-caption">Last 30 days</p>
+          <div class="stat-grid">
+            <div v-for="t in periodStats" :key="t.label" class="stat-tile">
+              <p class="stat-label">{{ t.label }}</p>
+              <p class="stat-value">{{ t.value }}<span v-if="t.unit" class="stat-unit">{{ t.unit }}</span></p>
+              <p v-if="t.delta != null" :class="['stat-delta', t.good === null || t.delta === 0 ? '' : ((t.delta > 0) === t.good ? 'up' : 'down')]">
+                {{ t.delta > 0 ? '▲' : t.delta < 0 ? '▼' : '' }} {{ Math.abs(t.delta) }}% vs prev. 30d
+              </p>
+              <p v-else-if="t.sub" class="stat-delta">{{ t.sub }}</p>
             </div>
-            <span style="color:var(--text-muted); font-size:18px;">{{ expandedLog===log.id ? '▲' : '▼' }}</span>
           </div>
-          <div v-if="expandedLog===log.id" class="log-body">
-            <div v-for="el in (log.exerciseLogs||[])" :key="el.exerciseId" style="padding:10px 0; border-bottom:1px solid var(--border);">
-              <div class="flex items-center gap-2 mb-1">
-                <span style="font-weight:600; font-size:15px;">{{ el.exerciseName }}</span>
+
+          <div class="chart-tabs mb-3">
+            <button v-for="m in OVERVIEW_METRICS" :key="m.key"
+              :class="['chart-tab', overviewMetric===m.key ? 'active' : '']" @click="overviewMetric=m.key">{{ m.label }}</button>
+          </div>
+          <div class="card mb-4" style="padding:16px;">
+            <div style="height:240px; position:relative;">
+              <canvas v-if="overviewHasData" id="ov-chart"></canvas>
+              <div v-else class="chart-empty">Log at least two sessions to see trends.</div>
+            </div>
+          </div>
+
+          <div v-if="lastSession" class="log-item" style="margin-bottom:0;">
+            <div class="log-header" @click="openInHistory(lastSession.id)">
+              <div>
+                <p class="stat-label" style="margin-bottom:4px;">Last session</p>
+                <p class="log-date">{{ lastSession.name }} <span class="log-date-sub">· {{ fmtDate(lastSession.date) }}</span></p>
+                <p class="log-meta">{{ lastSession.minutes ? lastSession.minutes + ' min · ' : '' }}{{ lastSession.sets }} sets · {{ fmtNum(lastSession.volume) }} kg</p>
               </div>
-              <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
-                <span v-for="s in (el.sets||[])" :key="s.setNumber"
-                  :style="{background: s.skipped?'var(--bg-card-alt)':'var(--bg-card)', border:'1px solid var(--border)', borderRadius:'8px', padding:'6px 10px', fontSize:'13px', color: s.skipped?'var(--text-muted)':'var(--text-primary)'}">
-                  {{ s.skipped ? ('Set ' + s.setNumber + ' \u2013 skipped') : ('Set ' + s.setNumber + ': ' + s.weight + 'kg \xd7 ' + s.reps + ' @ RPE' + s.rpe) }}
-                </span>
-              </div>
-              <p v-if="el.note" class="text-xs text-secondary mt-1" style="font-style:italic;">"{{ el.note }}"</p>
+              <span class="text-sm" style="color:var(--accent-dark); font-weight:600; white-space:nowrap;">History →</span>
             </div>
           </div>
         </div>
-      </div>
+
+        <!-- ── EXERCISES ────────────────────────────────────────────────── -->
+        <div v-else-if="section==='exercises'">
+          <p v-if="!exercises.length" class="text-sm text-muted" style="text-align:center; padding:40px 0;">No exercises with logged sets yet.</p>
+          <template v-else>
+            <select class="input mb-3" v-model="selExId" aria-label="Exercise">
+              <option v-for="ex in exercises" :key="ex.id" :value="ex.id">{{ ex.name }}</option>
+            </select>
+
+            <div v-if="exStats" class="stat-grid stat-grid--3">
+              <div v-for="t in exStats" :key="t.label" class="stat-tile">
+                <p class="stat-label">{{ t.label }}</p>
+                <p class="stat-value">{{ t.value }}<span v-if="t.unit" class="stat-unit">{{ t.unit }}</span></p>
+                <p class="stat-delta">{{ t.sub }}</p>
+              </div>
+            </div>
+
+            <div class="chart-tabs mb-3">
+              <button v-for="m in EXERCISE_METRICS" :key="m.key"
+                :class="['chart-tab', exMetric===m.key ? 'active' : '']" @click="exMetric=m.key">{{ m.label }}</button>
+            </div>
+            <div class="card" style="padding:16px;">
+              <div style="height:260px; position:relative;">
+                <canvas v-if="exHasData" id="ex-chart"></canvas>
+                <div v-else class="chart-empty">No logged sets for this exercise.</div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- ── HISTORY ──────────────────────────────────────────────────── -->
+        <div v-else>
+          <div v-for="s in history" :key="s.id" class="log-item">
+            <div class="log-header" @click="toggle(s.id)">
+              <div>
+                <p class="log-date">{{ s.name }} <span class="log-date-sub">· {{ fmtLongDate(s.date) }}</span></p>
+                <p v-if="s.empty" class="log-meta">No sets logged</p>
+                <p v-else class="log-meta">
+                  {{ s.minutes ? s.minutes + ' min · ' : '' }}{{ s.performedCount }} exercise{{ s.performedCount !== 1 ? 's' : '' }} · {{ s.sets }} sets · {{ fmtNum(s.volume) }} kg
+                </p>
+              </div>
+              <span style="color:var(--text-muted); font-size:18px;">{{ expanded===s.id ? '▲' : '▼' }}</span>
+            </div>
+            <div v-if="expanded===s.id" class="log-body">
+              <div class="history-facts">
+                <span v-if="s.warmupMin != null">Warm-up {{ s.warmupMin }} min</span>
+                <span v-if="s.ev.overallSessionRpe != null">Session RPE {{ s.ev.overallSessionRpe }}</span>
+                <span v-if="s.readiness != null">Readiness {{ fmtNum(s.readiness, 1) }}</span>
+                <span v-if="s.ev.sleepTime != null">Sleep {{ s.ev.sleepTime }} h</span>
+              </div>
+              <div v-for="el in s.exercises" :key="el.exerciseId" class="history-ex">
+                <p style="font-weight:600; font-size:15px;">{{ el.exerciseName }}</p>
+                <div class="set-rows">
+                  <div v-for="(st, i) in el.sets" :key="i" :class="['set-row', st.skipped ? 'skipped' : '']">
+                    <span class="set-row-num">{{ st.setNumber }}</span>
+                    <span v-if="st.skipped" class="set-row-main">Skipped</span>
+                    <template v-else>
+                      <span class="set-row-main">{{ st.weight }} kg × {{ st.reps }}</span>
+                      <span class="set-row-rpe">RPE {{ st.rpe }}</span>
+                    </template>
+                  </div>
+                </div>
+                <p v-if="el.note" class="text-xs text-secondary mt-2" style="font-style:italic;">“{{ el.note }}”</p>
+              </div>
+              <p v-if="!s.exercises.length" class="text-sm text-muted" style="padding-top:12px;">This session was ended before any set was logged.</p>
+              <p v-if="s.ev.notes" class="text-sm text-secondary" style="padding-top:12px; font-style:italic;">“{{ s.ev.notes }}”</p>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   `
 };

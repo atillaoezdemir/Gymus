@@ -518,6 +518,7 @@ export const ActiveSessionView = {
       const { ui, ...logData } = sessionLog.value;
       const finalLog = plain({
         ...logData,
+        sessionName: props.tpl.name,
         endedAt: new Date().toISOString(),
         totalDuration: durationMin,
         evaluation: { ...evalAnswers, notes: evalNotes.value },
