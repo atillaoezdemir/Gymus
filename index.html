@@ -824,6 +824,44 @@
       border-color: var(--border);
     }
 
+    .link-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+    }
+
+    .link-row .text-link {
+      padding: 8px 0;
+    }
+
+    .info-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      color: var(--text-muted);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .info-btn[aria-expanded="true"] {
+      color: var(--accent-dark);
+    }
+
+    .info-note {
+      margin: 4px auto 0;
+      max-width: 300px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.45;
+      text-align: center;
+      color: var(--text-secondary);
+      background: var(--bg-card-alt);
+      border-radius: var(--radius-sm);
+    }
+
     .text-link {
       display: block;
       text-align: center;

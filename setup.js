@@ -24,6 +24,8 @@ const ICON_DOWNLOAD = `<svg width="20" height="20" viewBox="0 0 24 24" fill="non
 const ICON_RESTORE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V9"/><path d="M7 14l5-5 5 5"/><path d="M5 4h14"/></svg>`;
 const ICON_CHEVRON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
 
+const ICON_INFO = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>`;
+
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 // Restoring wipes the device, so the file is read and checked first and the
@@ -34,6 +36,7 @@ const RestoreBackup = {
     const pending = ref(null);   // { name, data, logs, sessions }
     const error = ref('');
     const busy = ref(false);
+    const showInfo = ref(false);
     async function pick(e) {
       const file = e.target.files[0];
       e.target.value = '';
@@ -64,7 +67,7 @@ const RestoreBackup = {
         error.value = 'Restore failed: ' + err.message;
       }
     }
-    return { pending, error, busy, pick, confirm, plural, ICON_RESTORE, ICON_CHEVRON };
+    return { pending, error, busy, showInfo, pick, confirm, plural, ICON_RESTORE, ICON_CHEVRON, ICON_INFO };
   },
   template: `
     <div>
@@ -80,10 +83,20 @@ const RestoreBackup = {
         </div>
       </div>
 
-      <label v-else-if="variant==='link'" class="text-link">
-        Have a backup? Restore it
-        <input type="file" accept=".json,application/json" hidden @change="pick">
-      </label>
+      <div v-else-if="variant==='link'">
+        <div class="link-row">
+          <label class="text-link">
+            Have a backup? Restore it
+            <input type="file" accept=".json,application/json" hidden @change="pick">
+          </label>
+          <button class="info-btn" :aria-expanded="showInfo" aria-label="What is a backup?" @click="showInfo=!showInfo">
+            <span v-html="ICON_INFO"></span>
+          </button>
+        </div>
+        <p v-if="showInfo" class="info-note">
+          A backup is a file you saved from Gymus, for example on your old phone. Restoring it brings back your programme and workout history.
+        </p>
+      </div>
 
       <label v-else class="action-row">
         <span class="action-row-icon" v-html="ICON_RESTORE"></span>
