@@ -17,69 +17,133 @@ function blankExercise() {
   return { id: genId(), name: '', defaultSets: 3 };
 }
 
-// ── Import / Export ───────────────────────────────────────────────────────────
-export const ImportExportView = {
-  props: { activeTemplateId: { type: Number, default: null } },
-  setup() {
-    const status = ref('');
-    async function doExport() {
-      const programs = await db.programs.toArray();
-      const sessionTemplates = await db.sessionTemplates.toArray();
-      const sessionLogs = await db.sessionLogs.toArray();
-      const appState = await db.appState.toArray();
-      const exerciseDefaults = await db.exerciseDefaults.toArray();
-      const blob = new Blob([JSON.stringify({ programs, sessionTemplates, sessionLogs, appState, exerciseDefaults }, null, 2)],
-        { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `training-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      status.value = 'Exported!';
-    }
-    async function doImport(e) {
+// ── Backup: export / restore ─────────────────────────────────────────────────
+const TABLES = ['programs', 'sessionTemplates', 'sessionLogs', 'appState', 'exerciseDefaults'];
+
+const ICON_DOWNLOAD = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>`;
+const ICON_RESTORE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V9"/><path d="M7 14l5-5 5 5"/><path d="M5 4h14"/></svg>`;
+const ICON_CHEVRON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+// Restoring wipes the device, so the file is read and checked first and the
+// user confirms with the numbers in front of them before anything is cleared.
+const RestoreBackup = {
+  props: { variant: { type: String, default: 'row' }, hasData: Boolean },
+  setup(props) {
+    const pending = ref(null);   // { name, data, logs, sessions }
+    const error = ref('');
+    const busy = ref(false);
+    async function pick(e) {
       const file = e.target.files[0];
+      e.target.value = '';
       if (!file) return;
+      error.value = '';
       try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        if (!data.programs || !data.sessionTemplates) throw new Error('Invalid file');
-        await db.programs.clear();
-        await db.sessionTemplates.clear();
-        await db.sessionLogs.clear();
-        await db.appState.clear();
-        await db.exerciseDefaults.clear();
-        await db.programs.bulkAdd(data.programs);
-        await db.sessionTemplates.bulkAdd(data.sessionTemplates);
-        if (data.sessionLogs?.length) await db.sessionLogs.bulkAdd(data.sessionLogs);
-        if (data.appState?.length) await db.appState.bulkAdd(data.appState);
-        if (data.exerciseDefaults?.length) await db.exerciseDefaults.bulkAdd(data.exerciseDefaults);
-        status.value = 'Imported! Reload the app.';
-        setTimeout(() => location.reload(), 1500);
-      } catch (err) {
-        status.value = 'Error: ' + err.message;
+        const data = JSON.parse(await file.text());
+        if (!Array.isArray(data.programs) || !Array.isArray(data.sessionTemplates)) throw new Error();
+        pending.value = { name: file.name, data, logs: data.sessionLogs?.length || 0, sessions: data.sessionTemplates.length };
+      } catch {
+        error.value = "That file isn't a Gymus backup.";
       }
     }
-    return { doExport, doImport, status };
+    async function confirm() {
+      busy.value = true;
+      try {
+        const { data } = pending.value;
+        await db.transaction('rw', TABLES.map(t => db[t]), async () => {
+          for (const t of TABLES) {
+            await db[t].clear();
+            if (data[t]?.length) await db[t].bulkAdd(data[t]);
+          }
+        });
+        location.reload();
+      } catch (err) {
+        busy.value = false;
+        pending.value = null;
+        error.value = 'Restore failed: ' + err.message;
+      }
+    }
+    return { pending, error, busy, pick, confirm, plural, ICON_RESTORE, ICON_CHEVRON };
   },
   template: `
     <div>
-      <p class="section-title">Import / Export</p>
-      <p class="text-sm text-secondary mb-4">Back up or restore all your training data.</p>
-      <button class="btn btn-primary mb-3" @click="doExport">⬇ Export JSON backup</button>
-      <div v-if="activeTemplateId != null" class="card mb-4" style="border-color:var(--accent); background:var(--bg-card-alt); padding:14px 16px;">
-        <p class="text-sm" style="font-weight:600; margin-bottom:2px;">Session in progress</p>
-        <p class="text-xs text-secondary" style="line-height:1.45;">Importing replaces all data, including the session you're doing now. Finish it first.</p>
+      <div v-if="pending" class="card confirm-card">
+        <p style="font-weight:700; margin-bottom:4px;">Restore this backup?</p>
+        <p class="text-sm text-secondary" style="line-height:1.45; margin-bottom:14px;">
+          {{ pending.name }} has {{ plural(pending.sessions, 'session template') }} and {{ plural(pending.logs, 'logged workout') }}.
+          <template v-if="hasData"> Everything currently on this device will be replaced.</template>
+        </p>
+        <div class="flex gap-2">
+          <button class="btn btn-sm btn-ghost" :disabled="busy" @click="pending=null">Cancel</button>
+          <button :class="['btn btn-sm', hasData ? 'btn-danger' : 'btn-primary']" :disabled="busy" @click="confirm">{{ busy ? 'Restoring…' : (hasData ? 'Replace my data' : 'Restore') }}</button>
+        </div>
       </div>
-      <label v-else class="btn btn-outline" style="cursor:pointer;">
-        ⬆ Import JSON
-        <input type="file" accept=".json" style="display:none" @change="doImport">
+
+      <label v-else-if="variant==='link'" class="text-link">
+        Have a backup? Restore it
+        <input type="file" accept=".json,application/json" hidden @change="pick">
       </label>
-      <p v-if="status" class="mt-3 text-sm text-accent" style="text-align:center;">{{ status }}</p>
+
+      <label v-else class="action-row">
+        <span class="action-row-icon" v-html="ICON_RESTORE"></span>
+        <span class="action-row-text">
+          <span class="action-row-title">Restore from backup</span>
+          <span class="action-row-sub">{{ hasData ? 'Replaces all data on this device' : 'Load a Gymus backup file' }}</span>
+        </span>
+        <span class="action-row-chev" v-html="ICON_CHEVRON"></span>
+        <input type="file" accept=".json,application/json" hidden @change="pick">
+      </label>
+
+      <p v-if="error" class="text-sm mt-2" :style="{ color: 'var(--danger)', textAlign: variant==='link' ? 'center' : 'left' }">{{ error }}</p>
     </div>
   `
 };
 
+export const ImportExportView = {
+  props: { activeTemplateId: { type: Number, default: null } },
+  components: { RestoreBackup },
+  setup() {
+    const counts = ref(null);
+    const exported = ref(false);
+    Promise.all([db.programs.count(), db.sessionLogs.count()]).then(([programs, logs]) => { counts.value = { programs, logs }; });
+    const hasData = computed(() => !!counts.value && (counts.value.programs > 0 || counts.value.logs > 0));
 
+    async function doExport() {
+      const out = {};
+      for (const t of TABLES) out[t] = await db[t].toArray();
+      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `gymus-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      exported.value = true;
+    }
+    return { counts, hasData, exported, doExport, plural, ICON_DOWNLOAD, ICON_CHEVRON };
+  },
+  template: `
+    <div v-if="counts">
+      <p class="section-title">Backup</p>
+      <p class="text-sm text-secondary mb-4" style="line-height:1.45;">Your data lives only on this device. Save a backup file to keep it safe or move it to another phone.</p>
+
+      <button v-if="hasData" class="action-row mb-2" @click="doExport">
+        <span class="action-row-icon" v-html="ICON_DOWNLOAD"></span>
+        <span class="action-row-text">
+          <span class="action-row-title">{{ exported ? 'Backup saved' : 'Save backup' }}</span>
+          <span class="action-row-sub">Programme and {{ plural(counts.logs, 'logged workout') }} as a JSON file</span>
+        </span>
+        <span class="action-row-chev" v-html="ICON_CHEVRON"></span>
+      </button>
+
+      <div v-if="activeTemplateId != null" class="card" style="border-color:var(--accent); background:var(--bg-card-alt); padding:14px 16px;">
+        <p class="text-sm" style="font-weight:600; margin-bottom:2px;">Session in progress</p>
+        <p class="text-xs text-secondary" style="line-height:1.45;">Restoring replaces all data, including the session you're doing now. Finish it first.</p>
+      </div>
+      <RestoreBackup v-else :has-data="hasData" />
+    </div>
+  `
+};
 
 // ── Session editor step (one session at a time) ───────────────────────────────
 const SessionEditor = {
@@ -169,7 +233,8 @@ const SessionEditor = {
 
 // ── Configure Cycle View ──────────────────────────────────────────────────────
 export const ConfigureCycleView = {
-  components: { DrumPicker, SessionEditor },
+  props: { hasProgram: Boolean },
+  components: { DrumPicker, SessionEditor, RestoreBackup },
   emits: ['saved'],
   setup(_, { emit }) {
     const step = ref('count');  // 'count' | 'sessions' | 'summary'
@@ -323,6 +388,7 @@ export const ConfigureCycleView = {
             </p>
           </div>
           <button class="btn btn-primary mt-4" @click="confirmCount">Confirm →</button>
+          <RestoreBackup v-if="!hasProgram" variant="link" class="mt-4" />
         </div>
 
         <!-- STEP: Sessions -->
@@ -498,6 +564,8 @@ export const SetupView = {
   components: { ConfigureCycleView, EditProgrammeView, ImportExportView },
   setup(props, { emit }) {
     const tab = ref(props.program ? 'edit' : 'configure');
+    // Creating or deleting a programme changes which tabs exist
+    watch(() => !!props.program, has => { tab.value = has ? 'edit' : 'configure'; });
     // New programme created → tell App to reload data AND navigate to session
     function onSaved() { emit('saved'); }
     // Template edited / programme deleted → just reload data, stay on Setup
@@ -507,15 +575,14 @@ export const SetupView = {
   },
   template: `
     <div class="main-content">
-      <!-- Sub-tabs -->
-      <div class="flex gap-2 mb-4" style="border-bottom:1px solid var(--border); padding-bottom:12px;">
-        <button v-if="!program"  :class="['btn btn-sm', tab==='configure' ? 'btn-primary' : 'btn-ghost']" style="flex:1;" @click="tab='configure'">Setup</button>
-        <button v-if="program"   :class="['btn btn-sm', tab==='edit'      ? 'btn-primary' : 'btn-ghost']" style="flex:1;" @click="tab='edit'">Programme</button>
-        <button :class="['btn btn-sm', tab==='export' ? 'btn-primary' : 'btn-ghost']" style="flex:1;" @click="tab='export'">Backup</button>
+      <!-- Sub-tabs: nothing to back up before a programme exists -->
+      <div v-if="program" class="seg" role="tablist">
+        <button role="tab" :aria-selected="tab==='edit'" :class="['seg-btn', tab==='edit' ? 'active' : '']" @click="tab='edit'">Programme</button>
+        <button role="tab" :aria-selected="tab==='export'" :class="['seg-btn', tab==='export' ? 'active' : '']" @click="tab='export'">Backup</button>
       </div>
 
       <transition name="fade" mode="out-in">
-        <ConfigureCycleView v-if="tab==='configure'" key="cfg" @saved="onSaved" />
+        <ConfigureCycleView v-if="!program || tab==='configure'" key="cfg" :has-program="!!program" @saved="onSaved" />
         <EditProgrammeView  v-else-if="tab==='edit'" key="edit" :program="program" :templates="templates" :active-template-id="activeTemplateId" @deleted="onDeleted" @refresh="onRefresh" />
         <ImportExportView   v-else key="export" :active-template-id="activeTemplateId" />
       </transition>

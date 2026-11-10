@@ -272,6 +272,11 @@
       margin-top: 12px;
     }
 
+    /* Stacking gap only — side-by-side buttons in a row must line up */
+    .flex>.btn+.btn {
+      margin-top: 0;
+    }
+
     /* ── Buttons ── */
     .btn {
       display: flex;
@@ -755,6 +760,78 @@
     .seg--sm .seg-btn {
       padding: 6px 0;
       font-size: 13px;
+    }
+
+    /* ── List-style action rows (Backup) ── */
+    .action-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      text-align: left;
+      cursor: pointer;
+      transition: background 150ms, transform 100ms;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .action-row:active {
+      transform: scale(0.99);
+      background: var(--bg-card-alt);
+    }
+
+    .action-row-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: var(--bg-card-alt);
+      color: var(--text-primary);
+    }
+
+    .action-row-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .action-row-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .action-row-sub {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .action-row-chev {
+      display: flex;
+      color: var(--text-muted);
+    }
+
+    .confirm-card {
+      padding: 16px;
+      border-color: var(--border);
+    }
+
+    .text-link {
+      display: block;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent-dark);
+      padding: 8px;
+      cursor: pointer;
     }
 
     .stat-caption {
