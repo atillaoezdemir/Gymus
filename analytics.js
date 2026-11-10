@@ -424,22 +424,6 @@ export const AnalyticsView = {
     const history = computed(() => [...sessions.value].reverse());
 
     // ── Overview ─────────────────────────────────────────────────────────────
-    const periodStats = computed(() => {
-      const now = Date.now();
-      const inRange = (from, to) => trained.value.filter(s => s.date >= now - from * DAY_MS && s.date < now - to * DAY_MS);
-      const cur = inRange(30, 0), prev = inRange(60, 30);
-      const delta = (a, b) => (a != null && b ? Math.round(((a - b) / b) * 100) : null);
-      const avgDur = list => mean(list.map(s => s.minutes));
-      const vol = list => sum(list.map(s => s.volume));
-      const sets = list => sum(list.map(s => s.sets));
-      return [
-        { label: 'Sessions', value: fmtNum(cur.length), unit: '', sub: `${fmtNum(cur.length / (30 / 7), 1)} per week`, delta: delta(cur.length, prev.length), good: true },
-        { label: 'Volume', value: fmtNum(vol(cur)), unit: 'kg', delta: delta(vol(cur), vol(prev)), good: true },
-        { label: 'Working sets', value: fmtNum(sets(cur)), unit: '', delta: delta(sets(cur), sets(prev)), good: true },
-        { label: 'Avg duration', value: fmtNum(avgDur(cur)), unit: 'min', delta: delta(avgDur(cur), avgDur(prev)), good: null },
-      ];
-    });
-
     const lastSession = computed(() => history.value.find(s => !s.empty) || null);
 
     // Week/Month only appear once the data spans enough time to compare
@@ -450,6 +434,59 @@ export const AnalyticsView = {
     });
     const activeGrouping = computed(() => groupings.value.find(g => g.key === groupBy.value) || GROUPINGS[0]);
     const overviewPoints = computed(() => groupSessions(trained.value, activeGrouping.value));
+
+    // KPI tiles follow the grouping:
+    //   Day   → latest training day vs the training day before it
+    //   Week  → last 7 days vs the 7 before
+    //   Month → last 30 days vs the 30 before
+    const delta = (a, b) => (a != null && b ? Math.round(((a - b) / b) * 100) : null);
+    const kpis = computed(() => {
+      const key = activeGrouping.value.key;
+      if (key === 'day') {
+        const days = groupSessions(trained.value, GROUPINGS[0]);
+        const cur = days[days.length - 1];
+        if (!cur) return { caption: 'Last session', vs: '', tiles: [] };
+        // Push vs Legs volume says nothing, so compare like with like:
+        // a single session against the previous one with the same name
+        let p = days[days.length - 2] || {}, vs = 'vs the training day before';
+        if (cur.count === 1) {
+          const name = cur.sessions[0].name;
+          const before = trained.value.filter(x => x.name === name && x.date < cur.date);
+          const last = before[before.length - 1];
+          p = last ? { volume: last.volume, sets: last.sets, minutes: last.minutes, ev: last.ev } : {};
+          vs = `vs last ${name}`;
+        }
+        return {
+          caption: cur.count === 1 ? `${cur.sessions[0].name} · ${fmtLongDate(cur.date)}` : `${cur.count} sessions · ${fmtLongDate(cur.date)}`,
+          vs,
+          tiles: [
+            { label: 'Volume', value: fmtNum(cur.volume), unit: 'kg', delta: delta(cur.volume, p.volume), good: true },
+            { label: 'Working sets', value: fmtNum(cur.sets), unit: '', delta: delta(cur.sets, p.sets), good: true },
+            { label: 'Duration', value: fmtNum(cur.minutes), unit: 'min', delta: delta(cur.minutes, p.minutes), good: null },
+            { label: 'Session RPE', value: fmtNum(cur.ev.overallSessionRpe, Number.isInteger(cur.ev.overallSessionRpe) ? 0 : 1), unit: '',
+              delta: delta(cur.ev.overallSessionRpe, p.ev?.overallSessionRpe), good: null },
+          ],
+        };
+      }
+      const days = key === 'week' ? 7 : 30;
+      const now = Date.now();
+      const inRange = (from, to) => trained.value.filter(s => s.date >= now - from * DAY_MS && s.date < now - to * DAY_MS);
+      const cur = inRange(days, 0), prev = inRange(days * 2, days);
+      const avgDur = list => mean(list.map(s => s.minutes));
+      const vol = list => sum(list.map(s => s.volume));
+      const sets = list => sum(list.map(s => s.sets));
+      return {
+        caption: `Last ${days} days`,
+        vs: key === 'week' ? 'vs the week before' : 'vs the month before',
+        tiles: [
+          { label: 'Sessions', value: fmtNum(cur.length), unit: '', delta: delta(cur.length, prev.length), good: true,
+            sub: key === 'month' ? `${fmtNum(cur.length / (30 / 7), 1)} per week` : '' },
+          { label: 'Volume', value: fmtNum(vol(cur)), unit: 'kg', delta: delta(vol(cur), vol(prev)), good: true },
+          { label: 'Working sets', value: fmtNum(sets(cur)), unit: '', delta: delta(sets(cur), sets(prev)), good: true },
+          { label: 'Avg duration', value: fmtNum(avgDur(cur)), unit: 'min', delta: delta(avgDur(cur), avgDur(prev)), good: null },
+        ],
+      };
+    });
 
     function openInHistory(id) {
       expanded.value = id;
@@ -544,7 +581,7 @@ export const AnalyticsView = {
 
     return {
       loading, sessions, history, section, SECTIONS,
-      periodStats, lastSession, openInHistory,
+      kpis, lastSession, openInHistory,
       OVERVIEW_METRICS, overviewMetric, overviewHasData, groupings, activeGrouping, groupBy,
       EXERCISE_METRICS, exMetric, exercises, selExId, exStats, exHasData,
       expanded, toggle, fmtNum, fmtLongDate, fmtDate,
@@ -569,13 +606,17 @@ export const AnalyticsView = {
 
         <!-- ── OVERVIEW ─────────────────────────────────────────────────── -->
         <div v-if="section==='overview'">
-          <p class="stat-caption">Last 30 days</p>
+          <div v-if="groupings.length > 1" class="seg seg--sm" role="tablist" aria-label="Period">
+            <button v-for="g in groupings" :key="g.key" role="tab" :aria-selected="activeGrouping.key===g.key"
+              :class="['seg-btn', activeGrouping.key===g.key ? 'active' : '']" @click="groupBy=g.key">{{ g.label }}</button>
+          </div>
+          <p class="stat-caption">{{ kpis.caption }}</p>
           <div class="stat-grid">
-            <div v-for="t in periodStats" :key="t.label" class="stat-tile">
+            <div v-for="t in kpis.tiles" :key="t.label" class="stat-tile">
               <p class="stat-label">{{ t.label }}</p>
               <p class="stat-value">{{ t.value }}<span v-if="t.unit" class="stat-unit">{{ t.unit }}</span></p>
               <p v-if="t.delta != null" :class="['stat-delta', t.good === null || t.delta === 0 ? '' : ((t.delta > 0) === t.good ? 'up' : 'down')]">
-                {{ t.delta > 0 ? '▲' : t.delta < 0 ? '▼' : '' }} {{ Math.abs(t.delta) }}% vs the month before
+                {{ t.delta > 0 ? '▲' : t.delta < 0 ? '▼' : '' }} {{ Math.abs(t.delta) }}% {{ kpis.vs }}
               </p>
               <p v-else-if="t.sub" class="stat-delta">{{ t.sub }}</p>
             </div>
@@ -586,10 +627,6 @@ export const AnalyticsView = {
               :class="['chart-tab', overviewMetric===m.key ? 'active' : '']" @click="overviewMetric=m.key">{{ m.label }}</button>
           </div>
           <div class="card mb-4" style="padding:16px;">
-            <div v-if="groupings.length > 1" class="seg seg--sm" role="tablist" aria-label="Group by">
-              <button v-for="g in groupings" :key="g.key" role="tab" :aria-selected="activeGrouping.key===g.key"
-                :class="['seg-btn', activeGrouping.key===g.key ? 'active' : '']" @click="groupBy=g.key">{{ g.label }}</button>
-            </div>
             <div style="height:240px; position:relative;">
               <canvas v-if="overviewHasData" id="ov-chart"></canvas>
               <div v-else class="chart-empty">Log at least two sessions to see trends.</div>
