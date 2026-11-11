@@ -308,6 +308,13 @@
       color: var(--bg);
     }
 
+    /* Disabled primary recedes instead of shouting */
+    .btn-primary:disabled {
+      opacity: 1;
+      background: var(--bg-card-alt);
+      color: var(--text-muted);
+    }
+
     .btn-accent {
       background: var(--accent);
       color: #fff;
@@ -866,6 +873,124 @@
       border-radius: var(--radius-sm);
     }
 
+    /* ── Setup: session editor ── */
+    .step-caption {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .step-bars {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 28px;
+    }
+
+    .step-bar {
+      flex: 1;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+    }
+
+    .step-bar.done {
+      background: var(--accent);
+    }
+
+    .step-bar.current {
+      background: var(--text-primary);
+    }
+
+    .field-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+    .title-input {
+      display: block;
+      width: 100%;
+      font-size: 22px !important;
+      font-weight: 700;
+      color: var(--text-primary);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid var(--border);
+      border-radius: 0;
+      outline: none;
+      padding: 4px 0 10px;
+      transition: border-color 150ms;
+    }
+
+    .title-input:focus {
+      border-bottom-color: var(--accent);
+    }
+
+    .title-input::placeholder {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .mb-6 {
+      margin-bottom: 28px;
+    }
+
+    .add-slot {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 52px;
+      margin-top: 4px;
+      border: 1.5px dashed var(--border-strong);
+      border-radius: var(--radius-sm);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--accent-dark);
+      -webkit-tap-highlight-color: transparent;
+      transition: background 150ms;
+    }
+
+    .add-slot span,
+    .add-slot svg {
+      display: block;
+    }
+
+    .add-slot:active {
+      background: var(--bg-card-alt);
+    }
+
+    /* Primary action pinned to the bottom, within thumb reach */
+    .footer-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-width: 480px;
+      margin: 0 auto;
+      z-index: 50;
+      padding: 12px 16px max(16px, env(safe-area-inset-bottom));
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-bar-spacer {
+      height: 120px;
+    }
+
+    .footer-hint {
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
     .text-link {
       display: block;
       text-align: center;
@@ -1381,7 +1506,7 @@
       <!-- ── Header ── -->
       <header class="app-header">
         <span class="app-logo">Gym<span>us</span></span>
-        <div class="nav-indicator">
+        <div v-if="program" class="nav-indicator">
           <div v-for="v in ['session','setup','analytics']" :key="v" :class="['nav-dot', view===v?'active':'']"></div>
         </div>
         <div class="header-actions">

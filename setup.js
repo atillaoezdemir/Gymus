@@ -26,6 +26,9 @@ const ICON_CHEVRON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none
 
 const ICON_INFO = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></svg>`;
 
+const ICON_PLUS = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
+const ICON_X = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>`;
+
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 // Restoring wipes the device, so the file is read and checked first and the
@@ -188,57 +191,64 @@ const SessionEditor = {
 
     function canNext() { return sessionName.value.trim() && props.session.exercises?.length > 0; }
 
+    // Says exactly what is still missing, so the disabled button never feels arbitrary.
+    const missing = computed(() => {
+      const noName = !sessionName.value.trim();
+      const noEx = !(props.session.exercises?.length > 0);
+      if (noName && noEx) return 'Name the session and add an exercise to continue';
+      if (noName) return 'Name the session to continue';
+      if (noEx) return 'Add an exercise to continue';
+      return '';
+    });
+
     function next() {
       if (!canNext()) return;
       emit('update', { ...props.session, name: sessionName.value.trim() });
       emit('next');
     }
 
-    return { editingIdx, sessionName, addExercise, removeExercise, canNext, next, updateName };
+    return { editingIdx, sessionName, addExercise, removeExercise, canNext, next, updateName, missing, ICON_PLUS, ICON_X };
   },
   template: `
     <div>
-      <p class="text-xs text-secondary mb-1" style="font-weight:600; letter-spacing:1.5px; text-transform:uppercase;">
-        Session {{ index + 1 }} of {{ total }}
+      <p class="step-caption">Session {{ index + 1 }} of {{ total }}</p>
+      <div class="step-bars">
+        <div v-for="i in total" :key="i" :class="['step-bar', i-1<index ? 'done' : '', i-1===index ? 'current' : '']"></div>
+      </div>
+
+      <label class="field-label" for="session-name">Session name</label>
+      <input id="session-name" class="title-input mb-6" v-model="sessionName" @blur="updateName" placeholder="e.g. Legs" autocomplete="off" />
+
+      <p class="field-label">Exercises</p>
+      <p v-if="!session.exercises?.length" class="text-sm text-secondary mb-3" style="line-height:1.45;">
+        List the exercises you do in this session. You'll log weights and reps while training.
       </p>
-      <div class="step-dots mb-4" style="display:flex; gap:6px;">
-        <div v-for="i in total" :key="i"
-          :style="{height:'4px', flex:1, borderRadius:'2px', background: i-1===index ? 'var(--text-primary)' : 'var(--border)'}"></div>
-      </div>
 
-      <div class="mb-4" style="border-bottom: 2px solid var(--border); padding-bottom: 8px;">
-        <input v-model="sessionName" @blur="updateName" placeholder="Session name (e.g. Legs)" style="font-size:24px; font-weight:800; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; width:100%;" />
-      </div>
-
-      <div class="mb-3">
-        <div class="flex items-center justify-between mb-3">
-          <span class="text-sm" style="font-weight:600;">Exercises</span>
+      <div v-for="(ex, i) in session.exercises" :key="ex.id" class="card mb-2" style="padding:12px; border:1px solid var(--border);">
+        <div class="flex items-center justify-between mb-2">
+          <input v-model="ex.name" placeholder="Exercise name" style="font-size:16px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1;" />
+          <button class="icon-btn text-danger" aria-label="Remove exercise" @click="removeExercise(i)" v-html="ICON_X"></button>
         </div>
-
-        <div v-for="(ex, i) in session.exercises" :key="ex.id" class="card mb-2" style="padding:12px; border:1px solid var(--border);">
-          <div class="flex items-center justify-between mb-2">
-            <input v-model="ex.name" placeholder="Exercise name" style="font-size:16px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1;" />
-            <button class="icon-btn text-danger" @click="removeExercise(i)">✕</button>
-          </div>
-          <div class="flex gap-4">
-            <div style="flex:1;">
-              <span class="text-xs text-secondary" style="font-weight:600; letter-spacing:1px; text-transform:uppercase; display:block; text-align:center;">Sets</span>
-              <DrumPicker v-model="ex.defaultSets" :small="true" :min="1" :max="20" />
-            </div>
+        <div class="flex gap-4">
+          <div style="flex:1;">
+            <span class="text-xs text-secondary" style="font-weight:600; letter-spacing:1px; text-transform:uppercase; display:block; text-align:center;">Sets</span>
+            <DrumPicker v-model="ex.defaultSets" :small="true" :min="1" :max="20" />
           </div>
         </div>
-        <button class="btn btn-ghost mt-2 btn-sm" @click="addExercise">+ Add exercise</button>
       </div>
+      <button class="add-slot" @click="addExercise">
+        <span v-html="ICON_PLUS"></span> Add exercise
+      </button>
 
-      <div v-if="!canNext() && session.exercises?.length === 0" class="text-xs text-muted mb-3" style="text-align:center;">
-        Add at least one exercise to continue
-      </div>
-
-      <div class="flex gap-2 mt-4">
-        <button v-if="index > 0" class="btn btn-ghost" style="flex:1;" @click="$emit('prev')">Previous</button>
-        <button class="btn btn-primary" :style="{flex: index > 0 ? '1' : '1'}" :disabled="!canNext()" @click="next">
-          {{ index === total - 1 ? 'Review' : 'Continue' }}
-        </button>
+      <div class="footer-bar-spacer"></div>
+      <div class="footer-bar">
+        <p v-if="missing" class="footer-hint">{{ missing }}</p>
+        <div class="flex gap-2">
+          <button v-if="index > 0" class="btn btn-outline" style="flex:1;" @click="$emit('prev')">Previous</button>
+          <button class="btn btn-primary" style="flex:1;" :disabled="!canNext()" @click="next">
+            {{ index === total - 1 ? 'Review' : 'Continue' }}
+          </button>
+        </div>
       </div>
     </div>
   `
@@ -505,7 +515,7 @@ export const EditProgrammeView = {
 
     function removeEx(i) { editingTpl.value.exercises.splice(i, 1); }
 
-    return { confirmDelete, doDelete, editingTpl, startEditTpl, saveTpl, addEx, removeEx };
+    return { confirmDelete, doDelete, editingTpl, startEditTpl, saveTpl, addEx, removeEx, ICON_PLUS, ICON_X };
   },
   template: `
     <div>
@@ -547,14 +557,14 @@ export const EditProgrammeView = {
       <!-- Editing a template -->
       <div v-else>
         <div class="flex items-center justify-between mb-4" style="border-bottom: 2px solid var(--border); padding-bottom: 8px;">
-          <input v-model="editingTpl.name" placeholder="Session name" style="font-size:24px; font-weight:800; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1;" />
-          <button class="icon-btn" @click="editingTpl=null">✕</button>
+          <input v-model="editingTpl.name" class="title-input" placeholder="Session name" style="border:none; padding:0; flex:1;" />
+          <button class="icon-btn" aria-label="Close" @click="editingTpl=null" v-html="ICON_X"></button>
         </div>
 
         <div v-for="(ex, i) in editingTpl.exercises" :key="ex.id" class="card mb-2" style="padding:12px; border:1px solid var(--border);">
           <div class="flex items-center justify-between mb-2">
             <input v-model="ex.name" placeholder="Exercise name" style="font-size:16px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1;" />
-            <button class="icon-btn text-danger" @click="removeEx(i)">✕</button>
+            <button class="icon-btn text-danger" aria-label="Remove exercise" @click="removeEx(i)" v-html="ICON_X"></button>
           </div>
           <div class="flex gap-4">
             <div style="flex:1;">
@@ -563,7 +573,7 @@ export const EditProgrammeView = {
             </div>
           </div>
         </div>
-        <button class="btn btn-ghost mt-2 btn-sm" @click="addEx">+ Add exercise</button>
+        <button class="add-slot" @click="addEx"><span v-html="ICON_PLUS"></span> Add exercise</button>
         <button class="btn btn-accent mt-3" @click="saveTpl">Save changes</button>
       </div>
     </div>
