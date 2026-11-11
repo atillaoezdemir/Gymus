@@ -1391,6 +1391,139 @@
       border-radius: 6px;
     }
 
+    /* ── Setup: review step ── */
+    .review-card {
+      padding: 8px 8px 8px 4px;
+      margin-bottom: 12px;
+    }
+
+    .card.review-card+.card.review-card {
+      margin-top: 0;
+    }
+
+    .review-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 48px;
+      position: relative;
+      border-top: 1px solid var(--border);
+    }
+
+    .review-row--head {
+      border-top: none;
+      min-height: 52px;
+    }
+
+    .review-row .drag-handle {
+      width: 32px;
+      min-height: 44px;
+    }
+
+    .review-num {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      background: var(--bg-card-alt);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+
+    .review-title {
+      flex: 1;
+      min-width: 0;
+      font-size: 17px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .review-ex {
+      flex: 1;
+      min-width: 0;
+      padding-left: 32px; /* lines up with the session title, past the number */
+      font-size: 15px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .review-sets {
+      font-size: 13px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .review-edit {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent-dark);
+      padding: 12px 8px;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .review-x {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      color: var(--text-muted);
+      -webkit-tap-highlight-color: transparent;
+      transition: color 150ms, background 150ms;
+    }
+
+    .review-x:active {
+      color: var(--danger);
+      background: var(--danger-light);
+    }
+
+    .review-x span,
+    .review-x svg {
+      display: block;
+    }
+
+    .review-empty {
+      border-top: 1px solid var(--border);
+      padding: 14px 8px 8px 72px;
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .undo-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      padding: 4px 4px 4px 14px;
+      border-radius: var(--radius-sm);
+      background: var(--text-primary);
+      color: var(--bg);
+      font-size: 14px;
+    }
+
+    .undo-bar span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .undo-bar button {
+      padding: 10px 12px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
     /* ── Drag handle (grip for reorder) ── */
     .drag-handle {
       display: flex;

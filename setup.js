@@ -29,6 +29,8 @@ const ICON_INFO = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" s
 const ICON_PLUS = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
 const ICON_X = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>`;
 
+const ICON_GRIP = `<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true" style="display:block"><circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/><circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/><circle cx="3" cy="13" r="1.5"/><circle cx="7" cy="13" r="1.5"/></svg>`;
+
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 // Restoring wipes the device, so the file is read and checked first and the
@@ -163,7 +165,7 @@ export const ImportExportView = {
 
 // ── Session editor step (one session at a time) ───────────────────────────────
 const SessionEditor = {
-  props: { session: Object, index: Number, total: Number },
+  props: { session: Object, index: Number, total: Number, reviewing: Boolean },
   emits: ['next', 'prev', 'update'],
   components: { DrumPicker },
   setup(props, { emit }) {
@@ -246,9 +248,9 @@ const SessionEditor = {
       <div class="footer-bar">
         <p v-if="missing" class="footer-hint">{{ missing }}</p>
         <div class="flex gap-2">
-          <button v-if="index > 0" class="btn btn-outline" style="flex:1;" @click="$emit('prev')">Previous</button>
+          <button v-if="index > 0 && !reviewing" class="btn btn-outline" style="flex:1;" @click="$emit('prev')">Previous</button>
           <button class="btn btn-primary" style="flex:1;" :disabled="!canNext()" @click="next">
-            {{ index === total - 1 ? 'Review' : 'Continue' }}
+            {{ reviewing ? 'Back to review' : index === total - 1 ? 'Review' : 'Continue' }}
           </button>
         </div>
       </div>
@@ -280,21 +282,42 @@ export const ConfigureCycleView = {
       sessions.value[curIdx.value] = { ...sessions.value[curIdx.value], ...updated };
     }
 
+    // Editing one session from the review returns straight to the review.
+    const reviewing = ref(false);
     function nextSession() {
+      if (reviewing.value) { reviewing.value = false; step.value = 'summary'; return; }
       if (curIdx.value < sessionCount.value - 1) curIdx.value++;
       else step.value = 'summary';
+    }
+    function editSession(idx) {
+      curIdx.value = idx;
+      reviewing.value = true;
+      step.value = 'sessions';
     }
 
     function prevSession() { if (curIdx.value > 0) curIdx.value--; }
 
     // ── Review management ─────────────────────────────────────────
-    function deleteSession(idx) {
-      sessions.value.splice(idx, 1);
-      sessionCount.value = sessions.value.length;
-      sessions.value.forEach((s, i) => { s.sessionIndex = i; });
-      if (sessions.value.length === 0) step.value = 'count';
+    // Removing is one tap, so it can always be undone from the footer.
+    const removed = ref(null);   // { kind, item, sIdx, eIdx, sessionId, label }
+    let removedTimer = null;
+    function remember(entry) {
+      removed.value = entry;
+      clearTimeout(removedTimer);
+      removedTimer = setTimeout(() => { removed.value = null; }, 6000);
     }
 
+    function reindex() {
+      sessions.value.forEach((s, i) => { s.sessionIndex = i; });
+      sessionCount.value = sessions.value.length;
+    }
+
+    function deleteSession(idx) {
+      if (sessions.value.length <= 1) return;
+      const [item] = sessions.value.splice(idx, 1);
+      reindex();
+      remember({ kind: 'session', item, sIdx: idx, label: item.name });
+    }
     function moveSession(idx, dir) {
       const newIdx = idx + dir;
       if (newIdx < 0 || newIdx >= sessions.value.length) return;
@@ -305,9 +328,35 @@ export const ConfigureCycleView = {
     }
 
     function deleteExercise(sIdx, eIdx) {
-      const exercises = sessions.value[sIdx].exercises.filter((_, i) => i !== eIdx);
-      sessions.value[sIdx] = { ...sessions.value[sIdx], exercises };
+      const session = sessions.value[sIdx];
+      const item = session.exercises[eIdx];
+      const exercises = session.exercises.filter((_, i) => i !== eIdx);
+      sessions.value[sIdx] = { ...session, exercises };
+      remember({ kind: 'exercise', item, eIdx, sessionId: session.tempId, label: item.name });
     }
+
+    function undoRemove() {
+      const r = removed.value;
+      if (!r) return;
+      if (r.kind === 'session') {
+        sessions.value.splice(Math.min(r.sIdx, sessions.value.length), 0, r.item);
+        reindex();
+      } else {
+        const sIdx = sessions.value.findIndex(s => s.tempId === r.sessionId);
+        if (sIdx !== -1) {
+          const exercises = [...sessions.value[sIdx].exercises];
+          exercises.splice(Math.min(r.eIdx, exercises.length), 0, r.item);
+          sessions.value[sIdx] = { ...sessions.value[sIdx], exercises };
+        }
+      }
+      removed.value = null;
+      clearTimeout(removedTimer);
+    }
+
+    const saveMissing = computed(() => {
+      const empty = sessions.value.find(s => !s.exercises?.length);
+      return empty ? `Add an exercise to ${empty.name || 'every session'} or remove it` : '';
+    });
 
     function moveExercise(sIdx, eIdx, dir) {
       const newIdx = eIdx + dir;
@@ -385,6 +434,7 @@ export const ConfigureCycleView = {
 
     // Save programme (iterates sessions array correctly)
     async function saveProg() {
+      if (saveMissing.value) return;
       saving.value = true;
       try {
         const pid = await saveProgram('My Programme', sessionCount.value);
@@ -398,7 +448,7 @@ export const ConfigureCycleView = {
       } finally { saving.value = false; }
     }
 
-    return { step, sessionCount, sessions, curIdx, confirmCount, updateSession, nextSession, prevSession, deleteSession, deleteExercise, drag, onDragStart, saveProg, saving };
+    return { step, sessionCount, sessions, curIdx, confirmCount, updateSession, nextSession, prevSession, deleteSession, deleteExercise, drag, onDragStart, saveProg, saving, reviewing, editSession, removed, undoRemove, saveMissing, plural, ICON_GRIP, ICON_X };
   },
   template: `
     <div>
@@ -422,6 +472,7 @@ export const ConfigureCycleView = {
             :session="sessions[curIdx]"
             :index="curIdx"
             :total="sessionCount"
+            :reviewing="reviewing"
             @update="updateSession"
             @next="nextSession"
             @prev="prevSession"
@@ -430,59 +481,48 @@ export const ConfigureCycleView = {
 
         <!-- STEP: Summary -->
         <div v-else-if="step === 'summary'" key="summary">
-          <p class="section-title">All set!</p>
-          <p class="text-secondary text-sm mb-4" style="line-height: 1.45;">Almost done! Here is your {{ sessions.length }}-session cycle. You can drag the handles to reorder sessions and exercises, or use the ✕ button to remove anything you don't need.</p>
+          <p class="section-title">Review your cycle</p>
+          <p class="text-sm text-secondary mb-4" style="line-height:1.45;">You'll train these sessions in this order, then start again. Drag to reorder.</p>
 
-          <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card mb-3"
+          <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card review-card"
             :style="drag.active && drag.type === 'session' && drag.sIdx === sIdx
               ? {transform: 'translateY('+drag.offsetY+'px)', transition: 'none', zIndex: 10, position: 'relative', boxShadow: 'var(--shadow-lg)', opacity: 0.92}
               : {transition: 'transform 180ms ease'}">
-            <div class="flex items-center" style="gap:12px; margin-bottom:8px;">
-              <div class="drag-handle"
+            <div class="review-row review-row--head">
+              <div class="drag-handle" aria-label="Drag to reorder session"
                 @touchstart.prevent="onDragStart($event, 'session', sIdx, null)"
-                @mousedown.prevent="onDragStart($event, 'session', sIdx, null)">
-                <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor" style="display:block;">
-                  <circle cx="4" cy="4" r="2"/><circle cx="10" cy="4" r="2"/>
-                  <circle cx="4" cy="10" r="2"/><circle cx="10" cy="10" r="2"/>
-                  <circle cx="4" cy="16" r="2"/><circle cx="10" cy="16" r="2"/>
-                </svg>
-              </div>
-              <div style="flex:1; min-width:0;">
-                <p style="font-size:17px; font-weight:700;">{{ s.name }}</p>
-                <p class="text-xs text-secondary mt-1">{{ s.exercises.length }} exercise{{ s.exercises.length !== 1 ? 's' : '' }}</p>
-              </div>
-              <button class="review-action-btn review-action-btn--danger" @click="deleteSession(sIdx)" title="Delete session">✕</button>
+                @mousedown.prevent="onDragStart($event, 'session', sIdx, null)" v-html="ICON_GRIP"></div>
+              <span class="review-num">{{ sIdx + 1 }}</span>
+              <p class="review-title">{{ s.name }}</p>
+              <button class="review-edit" @click="editSession(sIdx)">Edit</button>
+              <button v-if="sessions.length > 1" class="review-x" :aria-label="'Remove ' + s.name" @click="deleteSession(sIdx)" v-html="ICON_X"></button>
             </div>
-            <div>
-              <div v-for="(ex, eIdx) in s.exercises" :key="ex.id" class="flex items-center"
-                :style="{
-                  padding: '8px 0',
-                  borderBottom: eIdx < s.exercises.length - 1 ? '1px solid var(--border)' : 'none',
-                  transform: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 'translateY('+drag.offsetY+'px)' : '',
-                  transition: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 'none' : 'transform 180ms ease',
-                  zIndex: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 5 : 'auto',
-                  position: 'relative',
-                  background: drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx ? 'var(--bg-card)' : ''
-                }">
-                <div class="drag-handle drag-handle--sm"
-                  @touchstart.prevent="onDragStart($event, 'exercise', sIdx, eIdx)"
-                  @mousedown.prevent="onDragStart($event, 'exercise', sIdx, eIdx)">
-                  <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" style="display:block;">
-                    <circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/>
-                    <circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/>
-                    <circle cx="3" cy="13" r="1.5"/><circle cx="7" cy="13" r="1.5"/>
-                  </svg>
-                </div>
-                <span class="exercise-row-name" style="font-size:15px; flex:1; padding:0 8px;">{{ ex.name }}</span>
-                <button class="review-action-btn review-action-btn--sm review-action-btn--danger" @click="deleteExercise(sIdx, eIdx)" title="Delete exercise">✕</button>
-              </div>
+
+            <div v-for="(ex, eIdx) in s.exercises" :key="ex.id" class="review-row"
+              :style="drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx
+                ? {transform: 'translateY('+drag.offsetY+'px)', transition: 'none', zIndex: 5, background: 'var(--bg-card)', boxShadow: 'var(--shadow-sm)'}
+                : {transition: 'transform 180ms ease'}">
+              <div class="drag-handle" aria-label="Drag to reorder exercise"
+                @touchstart.prevent="onDragStart($event, 'exercise', sIdx, eIdx)"
+                @mousedown.prevent="onDragStart($event, 'exercise', sIdx, eIdx)" v-html="ICON_GRIP"></div>
+              <span class="review-ex">{{ ex.name }}</span>
+              <span class="review-sets">{{ plural(ex.defaultSets, 'set') }}</span>
+              <button class="review-x" :aria-label="'Remove ' + ex.name" @click="deleteExercise(sIdx, eIdx)" v-html="ICON_X"></button>
             </div>
+            <p v-if="!s.exercises.length" class="review-empty">No exercises left. <button class="text-link" style="display:inline; padding:0;" @click="editSession(sIdx)">Add some</button></p>
           </div>
 
-          <button class="btn btn-accent mt-2" :disabled="saving || sessions.length === 0" @click="saveProg">
-            {{ saving ? 'Saving…' : 'Save programme' }}
-          </button>
-          <button class="btn btn-ghost mt-2" @click="step='sessions'; curIdx=sessions.length-1">Edit sessions</button>
+          <div class="footer-bar-spacer"></div>
+          <div class="footer-bar">
+            <div v-if="removed" class="undo-bar">
+              <span>Removed “{{ removed.label }}”</span>
+              <button @click="undoRemove">Undo</button>
+            </div>
+            <p v-else-if="saveMissing" class="footer-hint">{{ saveMissing }}</p>
+            <button class="btn btn-accent" :disabled="saving || !!saveMissing" @click="saveProg">
+              {{ saving ? 'Saving…' : 'Save programme' }}
+            </button>
+          </div>
         </div>
       </transition>
     </div>
