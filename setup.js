@@ -181,15 +181,16 @@ const SessionEditor = {
     function addExercise() {
       const exercises = [...(props.session.exercises || [])];
       exercises.push(blankExercise());
-      emit('update', { ...props.session, exercises });
+      emit('update', { ...props.session, name: sessionName.value, exercises });
     }
 
     function removeExercise(idx) {
       const exercises = props.session.exercises.filter((_, i) => i !== idx);
-      emit('update', { ...props.session, exercises });
+      emit('update', { ...props.session, name: sessionName.value, exercises });
     }
 
-    function canNext() { return sessionName.value.trim() && props.session.exercises?.length > 0; }
+    const unnamedEx = () => (props.session.exercises || []).some(ex => !ex.name?.trim());
+    function canNext() { return sessionName.value.trim() && props.session.exercises?.length > 0 && !unnamedEx(); }
 
     // Says exactly what is still missing, so the disabled button never feels arbitrary.
     const missing = computed(() => {
@@ -198,6 +199,7 @@ const SessionEditor = {
       if (noName && noEx) return 'Name the session and add an exercise to continue';
       if (noName) return 'Name the session to continue';
       if (noEx) return 'Add an exercise to continue';
+      if (unnamedEx()) return 'Name every exercise to continue';
       return '';
     });
 
@@ -504,6 +506,7 @@ export const EditProgrammeView = {
     function startEditTpl(tpl) { editingTpl.value = JSON.parse(JSON.stringify(tpl)); }
 
     async function saveTpl() {
+      if (tplMissing.value) return;
       await saveTemplate(editingTpl.value);
       emit('refresh');
       editingTpl.value = null;
@@ -515,7 +518,16 @@ export const EditProgrammeView = {
 
     function removeEx(i) { editingTpl.value.exercises.splice(i, 1); }
 
-    return { confirmDelete, doDelete, editingTpl, startEditTpl, saveTpl, addEx, removeEx, ICON_PLUS, ICON_X };
+    const tplMissing = computed(() => {
+      const t = editingTpl.value;
+      if (!t) return '';
+      if (!t.name?.trim()) return 'Name the session to save';
+      if (!t.exercises?.length) return 'Add an exercise to save';
+      if (t.exercises.some(ex => !ex.name?.trim())) return 'Name every exercise to save';
+      return '';
+    });
+
+    return { confirmDelete, doDelete, editingTpl, startEditTpl, saveTpl, addEx, removeEx, tplMissing, ICON_PLUS, ICON_X };
   },
   template: `
     <div>
@@ -574,7 +586,8 @@ export const EditProgrammeView = {
           </div>
         </div>
         <button class="add-slot" @click="addEx"><span v-html="ICON_PLUS"></span> Add exercise</button>
-        <button class="btn btn-accent mt-3" @click="saveTpl">Save changes</button>
+        <p v-if="tplMissing" class="footer-hint mt-4" style="margin-bottom:0;">{{ tplMissing }}</p>
+        <button class="btn btn-accent mt-3" :disabled="!!tplMissing" @click="saveTpl">Save changes</button>
       </div>
     </div>
   `
