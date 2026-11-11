@@ -1205,34 +1205,44 @@
       opacity: 0;
     }
 
+    /* Slides move with relative offsets, not transform: a transform would make
+       position:fixed children (the setup footer bar) jump mid-animation. */
+    .slide-up-enter-active,
+    .slide-up-leave-active,
+    .slide-right-enter-active,
+    .slide-right-leave-active {
+      position: relative;
+      transition: opacity 200ms ease, top 200ms ease, left 200ms ease;
+    }
+
     .slide-up-enter-active,
     .slide-up-leave-active {
-      transition: all 200ms ease;
-    }
-
-    .slide-up-enter-from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    .slide-up-leave-to {
-      opacity: 0;
-      transform: translateY(-12px);
+      top: 0;
     }
 
     .slide-right-enter-active,
     .slide-right-leave-active {
-      transition: all 200ms ease;
+      left: 0;
+    }
+
+    .slide-up-enter-from {
+      opacity: 0;
+      top: 20px;
+    }
+
+    .slide-up-leave-to {
+      opacity: 0;
+      top: -12px;
     }
 
     .slide-right-enter-from {
       opacity: 0;
-      transform: translateX(32px);
+      left: 32px;
     }
 
     .slide-right-leave-to {
       opacity: 0;
-      transform: translateX(-20px);
+      left: -20px;
     }
 
     .menu-enter-active,
