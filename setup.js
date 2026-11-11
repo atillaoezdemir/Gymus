@@ -192,6 +192,47 @@ const SessionEditor = {
     }
 
     const unnamedEx = () => (props.session.exercises || []).some(ex => !ex.name?.trim());
+    // Drag-to-reorder exercises. Cards differ in height, so the swap point is
+    // half the neighbour's height and the anchor moves with the swapped card.
+    const listEl = ref(null);
+    const exDrag = reactive({ active: false, idx: null, startY: 0, offsetY: 0 });
+    const cardEls = () => listEl.value ? [...listEl.value.querySelectorAll('.ex-card')] : [];
+    function exDragStart(e, idx) {
+      const p = e.touches ? e.touches[0] : e;
+      Object.assign(exDrag, { active: true, idx, startY: p.clientY, offsetY: 0 });
+      document.addEventListener('touchmove', exDragMove, { passive: false });
+      document.addEventListener('touchend', exDragEnd);
+      document.addEventListener('mousemove', exDragMove);
+      document.addEventListener('mouseup', exDragEnd);
+    }
+    function exDragMove(e) {
+      if (!exDrag.active) return;
+      e.preventDefault();
+      const p = e.touches ? e.touches[0] : e;
+      exDrag.offsetY = p.clientY - exDrag.startY;
+      const dir = exDrag.offsetY > 0 ? 1 : -1;
+      const to = exDrag.idx + dir;
+      const list = props.session.exercises || [];
+      const neighbour = cardEls()[to];
+      if (!neighbour || to < 0 || to >= list.length) return;
+      const step = neighbour.offsetHeight + 8;
+      if (Math.abs(exDrag.offsetY) < step / 2) return;
+      const exercises = [...list];
+      [exercises[exDrag.idx], exercises[to]] = [exercises[to], exercises[exDrag.idx]];
+      emit('update', { ...props.session, name: sessionName.value, exercises });
+      exDrag.idx = to;
+      exDrag.startY += dir * step;
+      exDrag.offsetY = p.clientY - exDrag.startY;
+    }
+    function exDragEnd() {
+      exDrag.active = false;
+      exDrag.offsetY = 0;
+      document.removeEventListener('touchmove', exDragMove);
+      document.removeEventListener('touchend', exDragEnd);
+      document.removeEventListener('mousemove', exDragMove);
+      document.removeEventListener('mouseup', exDragEnd);
+    }
+
     function canNext() { return sessionName.value.trim() && props.session.exercises?.length > 0 && !unnamedEx(); }
 
     // Says exactly what is still missing, so the disabled button never feels arbitrary.
@@ -211,7 +252,7 @@ const SessionEditor = {
       emit('next');
     }
 
-    return { editingIdx, sessionName, addExercise, removeExercise, canNext, next, updateName, missing, ICON_PLUS, ICON_X };
+    return { editingIdx, sessionName, addExercise, removeExercise, canNext, next, updateName, missing, listEl, exDrag, exDragStart, ICON_PLUS, ICON_X, ICON_GRIP };
   },
   template: `
     <div>
@@ -228,9 +269,15 @@ const SessionEditor = {
         List the exercises you do in this session. You'll log weights and reps while training.
       </p>
 
-      <div v-for="(ex, i) in session.exercises" :key="ex.id" class="card mb-2" style="padding:12px; border:1px solid var(--border);">
-        <div class="flex items-center justify-between mb-2">
-          <input v-model="ex.name" placeholder="Exercise name" style="font-size:16px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1;" />
+      <div ref="listEl">
+      <div v-for="(ex, i) in session.exercises" :key="ex.id" class="card mb-2 ex-card"
+        :style="exDrag.active && exDrag.idx === i
+          ? {transform: 'translateY(' + exDrag.offsetY + 'px)', transition: 'none', position: 'relative', zIndex: 10, boxShadow: 'var(--shadow-lg)'}
+          : {transition: 'transform 180ms ease'}">
+        <div class="flex items-center mb-2" style="gap:4px;">
+          <div v-if="session.exercises.length > 1" class="drag-handle" aria-label="Drag to reorder exercise"
+            @touchstart.prevent="exDragStart($event, i)" @mousedown.prevent="exDragStart($event, i)" v-html="ICON_GRIP"></div>
+          <input v-model="ex.name" placeholder="Exercise name" style="font-size:16px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1; min-width:0;" />
           <button class="icon-btn text-danger" aria-label="Remove exercise" @click="removeExercise(i)" v-html="ICON_X"></button>
         </div>
         <div class="flex gap-4">
@@ -239,6 +286,7 @@ const SessionEditor = {
             <DrumPicker v-model="ex.defaultSets" :small="true" :min="1" :max="20" />
           </div>
         </div>
+      </div>
       </div>
       <button class="add-slot" @click="addExercise">
         <span v-html="ICON_PLUS"></span> Add exercise
@@ -482,7 +530,7 @@ export const ConfigureCycleView = {
         <!-- STEP: Summary -->
         <div v-else-if="step === 'summary'" key="summary">
           <p class="section-title">Review your cycle</p>
-          <p class="text-sm text-secondary mb-4" style="line-height:1.45;">You'll train these sessions in this order, then start again. Drag to reorder.</p>
+          <p class="text-sm text-secondary mb-4" style="line-height:1.45;">You'll train these sessions in this order, then start again. Drag to reorder; tap Edit to change exercises.</p>
 
           <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card review-card"
             :style="drag.active && drag.type === 'session' && drag.sIdx === sIdx
@@ -498,16 +546,9 @@ export const ConfigureCycleView = {
               <button v-if="sessions.length > 1" class="review-x" :aria-label="'Remove ' + s.name" @click="deleteSession(sIdx)" v-html="ICON_X"></button>
             </div>
 
-            <div v-for="(ex, eIdx) in s.exercises" :key="ex.id" class="review-row"
-              :style="drag.active && drag.type === 'exercise' && drag.sIdx === sIdx && drag.eIdx === eIdx
-                ? {transform: 'translateY('+drag.offsetY+'px)', transition: 'none', zIndex: 5, background: 'var(--bg-card)', boxShadow: 'var(--shadow-sm)'}
-                : {transition: 'transform 180ms ease'}">
-              <div class="drag-handle" aria-label="Drag to reorder exercise"
-                @touchstart.prevent="onDragStart($event, 'exercise', sIdx, eIdx)"
-                @mousedown.prevent="onDragStart($event, 'exercise', sIdx, eIdx)" v-html="ICON_GRIP"></div>
+            <div v-for="ex in s.exercises" :key="ex.id" class="review-row review-row--ex">
               <span class="review-ex">{{ ex.name }}</span>
               <span class="review-sets">{{ plural(ex.defaultSets, 'set') }}</span>
-              <button class="review-x" :aria-label="'Remove ' + ex.name" @click="deleteExercise(sIdx, eIdx)" v-html="ICON_X"></button>
             </div>
             <p v-if="!s.exercises.length" class="review-empty">No exercises left. <button class="text-link" style="display:inline; padding:0;" @click="editSession(sIdx)">Add some</button></p>
           </div>

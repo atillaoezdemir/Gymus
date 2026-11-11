@@ -1393,7 +1393,7 @@
 
     /* ── Setup: review step ── */
     .review-card {
-      padding: 8px 8px 8px 4px;
+      padding: 6px 8px 10px;
       margin-bottom: 12px;
     }
 
@@ -1407,12 +1407,23 @@
       gap: 8px;
       min-height: 48px;
       position: relative;
-      border-top: 1px solid var(--border);
     }
 
+    /* Header divider spans the card; exercise dividers are inset to the text
+       column (title start → sets end) and lighter, so the header reads as one. */
     .review-row--head {
-      border-top: none;
       min-height: 52px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2px;
+    }
+
+    .review-row--ex {
+      min-height: 44px;
+      margin: 0 14px 0 72px;
+    }
+
+    .review-row--ex+.review-row--ex {
+      border-top: 1px solid var(--bg-card-alt);
     }
 
     .review-row .drag-handle {
@@ -1447,7 +1458,6 @@
     .review-ex {
       flex: 1;
       min-width: 0;
-      padding-left: 32px; /* lines up with the session title, past the number */
       font-size: 15px;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1492,8 +1502,7 @@
     }
 
     .review-empty {
-      border-top: 1px solid var(--border);
-      padding: 14px 8px 8px 72px;
+      padding: 12px 14px 4px 72px;
       font-size: 14px;
       color: var(--text-secondary);
     }
