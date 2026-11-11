@@ -31,6 +31,8 @@ const ICON_X = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stro
 
 const ICON_GRIP = `<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true" style="display:block"><circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/><circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/><circle cx="3" cy="13" r="1.5"/><circle cx="7" cy="13" r="1.5"/></svg>`;
 
+const ICON_GRIP_LG = `<svg width="12" height="20" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" style="display:block"><circle cx="3" cy="4" r="2"/><circle cx="9" cy="4" r="2"/><circle cx="3" cy="10" r="2"/><circle cx="9" cy="10" r="2"/><circle cx="3" cy="16" r="2"/><circle cx="9" cy="16" r="2"/></svg>`;
+
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 // Restoring wipes the device, so the file is read and checked first and the
@@ -163,11 +165,108 @@ export const ImportExportView = {
   `
 };
 
+
+// ── Fixed footer spacer ──────────────────────────────────────────────────────
+// Reserves exactly the footer's height (it grows with hints or Undo) so the
+// last item rests 16px above it, instead of guessing with a fixed spacer.
+const vFooterSpace = {
+  mounted(el) {
+    const footer = el.nextElementSibling;
+    const fit = () => {
+      const prev = el.previousElementSibling;
+      const prevMargin = prev ? parseFloat(getComputedStyle(prev).marginBottom) || 0 : 0;
+      const scroller = el.closest('.main-content');
+      const pad = scroller ? parseFloat(getComputedStyle(scroller).paddingBottom) || 0 : 0;
+      el.style.height = Math.max(0, footer.offsetHeight + 16 - pad - prevMargin) + 'px';
+    };
+    el._ro = new ResizeObserver(fit);
+    el._ro.observe(footer);
+    fit();
+  },
+  unmounted(el) { el._ro?.disconnect(); }
+};
+
+// ── Smooth drag-to-reorder ───────────────────────────────────────────────────
+// The list is not reordered while dragging: the held item follows the finger
+// and the items it passes slide out of the way. On release the item glides
+// into its slot, then the array is reordered with animations off for a frame.
+const SLIDE = 'transform 240ms cubic-bezier(.2, .8, .2, 1)';
+function useDragSort(listRef, selector, commit) {
+  const st = reactive({ from: -1, to: -1, offset: 0, settling: false, frozen: false });
+  let startY = 0, rects = [], shift = 0;
+
+  const point = e => (e.touches ? e.touches[0] : e).clientY;
+
+  function start(e, idx) {
+    if (st.settling) return;
+    const els = [...listRef.value.querySelectorAll(selector)];
+    rects = els.map(el => el.getBoundingClientRect());
+    if (rects.length < 2) return;
+    const gap = idx + 1 < rects.length ? rects[idx + 1].top - rects[idx].bottom : rects[idx].top - rects[idx - 1].bottom;
+    shift = rects[idx].height + gap;
+    startY = point(e);
+    Object.assign(st, { from: idx, to: idx, offset: 0 });
+    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchend', end);
+    document.addEventListener('touchcancel', end);
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', end);
+  }
+
+  function move(e) {
+    if (st.from < 0) return;
+    e.preventDefault();
+    const r = rects[st.from];
+    const min = rects[0].top - r.top, max = rects[rects.length - 1].bottom - r.bottom;
+    st.offset = Math.min(max, Math.max(min, point(e) - startY));
+    // Swap once the held item's leading edge crosses a neighbour's midline, so
+    // items of different heights can always pass each other.
+    const top = r.top + st.offset, bottom = r.bottom + st.offset;
+    let to = st.from;
+    for (let i = st.from + 1; i < rects.length; i++) if (bottom > rects[i].top + rects[i].height / 2) to = i;
+    for (let i = st.from - 1; i >= 0; i--) if (top < rects[i].top + rects[i].height / 2) to = i;
+    st.to = to;
+  }
+
+  function end() {
+    document.removeEventListener('touchmove', move);
+    document.removeEventListener('touchend', end);
+    document.removeEventListener('touchcancel', end);
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', end);
+    if (st.from < 0) return;
+    const { from, to } = st;
+    const r = rects[from];
+    st.settling = true;
+    st.offset = to > from ? rects[to].bottom - r.bottom : to < from ? rects[to].top - r.top : 0;
+    setTimeout(() => {
+      st.frozen = true;
+      if (to !== from) commit(from, to);
+      Object.assign(st, { from: -1, to: -1, offset: 0, settling: false });
+      requestAnimationFrame(() => requestAnimationFrame(() => { st.frozen = false; }));
+    }, 240);
+  }
+
+  function style(i) {
+    if (st.from < 0) return st.frozen ? { transition: 'none' } : {};
+    if (i === st.from) {
+      return { transform: `translateY(${st.offset}px)`, transition: st.settling ? SLIDE : 'none', position: 'relative', zIndex: 10, boxShadow: 'var(--shadow-lg)' };
+    }
+    let y = 0;
+    if (st.from < i && i <= st.to) y = -shift;
+    else if (st.to <= i && i < st.from) y = shift;
+    return { transform: y ? `translateY(${y}px)` : '', transition: SLIDE };
+  }
+
+  return { start, style, state: st };
+}
+
 // ── Session editor step (one session at a time) ───────────────────────────────
 const SessionEditor = {
   props: { session: Object, index: Number, total: Number, reviewing: Boolean },
   emits: ['next', 'prev', 'update'],
   components: { DrumPicker },
+  directives: { footerSpace: vFooterSpace },
   setup(props, { emit }) {
     const editingIdx = ref(null);
     const sessionName = ref(props.session.name || '');
@@ -192,46 +291,12 @@ const SessionEditor = {
     }
 
     const unnamedEx = () => (props.session.exercises || []).some(ex => !ex.name?.trim());
-    // Drag-to-reorder exercises. Cards differ in height, so the swap point is
-    // half the neighbour's height and the anchor moves with the swapped card.
     const listEl = ref(null);
-    const exDrag = reactive({ active: false, idx: null, startY: 0, offsetY: 0 });
-    const cardEls = () => listEl.value ? [...listEl.value.querySelectorAll('.ex-card')] : [];
-    function exDragStart(e, idx) {
-      const p = e.touches ? e.touches[0] : e;
-      Object.assign(exDrag, { active: true, idx, startY: p.clientY, offsetY: 0 });
-      document.addEventListener('touchmove', exDragMove, { passive: false });
-      document.addEventListener('touchend', exDragEnd);
-      document.addEventListener('mousemove', exDragMove);
-      document.addEventListener('mouseup', exDragEnd);
-    }
-    function exDragMove(e) {
-      if (!exDrag.active) return;
-      e.preventDefault();
-      const p = e.touches ? e.touches[0] : e;
-      exDrag.offsetY = p.clientY - exDrag.startY;
-      const dir = exDrag.offsetY > 0 ? 1 : -1;
-      const to = exDrag.idx + dir;
-      const list = props.session.exercises || [];
-      const neighbour = cardEls()[to];
-      if (!neighbour || to < 0 || to >= list.length) return;
-      const step = neighbour.offsetHeight + 8;
-      if (Math.abs(exDrag.offsetY) < step / 2) return;
-      const exercises = [...list];
-      [exercises[exDrag.idx], exercises[to]] = [exercises[to], exercises[exDrag.idx]];
+    const exSort = useDragSort(listEl, '.ex-card', (from, to) => {
+      const exercises = [...props.session.exercises];
+      exercises.splice(to, 0, exercises.splice(from, 1)[0]);
       emit('update', { ...props.session, name: sessionName.value, exercises });
-      exDrag.idx = to;
-      exDrag.startY += dir * step;
-      exDrag.offsetY = p.clientY - exDrag.startY;
-    }
-    function exDragEnd() {
-      exDrag.active = false;
-      exDrag.offsetY = 0;
-      document.removeEventListener('touchmove', exDragMove);
-      document.removeEventListener('touchend', exDragEnd);
-      document.removeEventListener('mousemove', exDragMove);
-      document.removeEventListener('mouseup', exDragEnd);
-    }
+    });
 
     function canNext() { return sessionName.value.trim() && props.session.exercises?.length > 0 && !unnamedEx(); }
 
@@ -252,7 +317,7 @@ const SessionEditor = {
       emit('next');
     }
 
-    return { editingIdx, sessionName, addExercise, removeExercise, canNext, next, updateName, missing, listEl, exDrag, exDragStart, ICON_PLUS, ICON_X, ICON_GRIP };
+    return { editingIdx, sessionName, addExercise, removeExercise, canNext, next, updateName, missing, listEl, exSort, ICON_PLUS, ICON_X, ICON_GRIP };
   },
   template: `
     <div>
@@ -271,12 +336,10 @@ const SessionEditor = {
 
       <div ref="listEl">
       <div v-for="(ex, i) in session.exercises" :key="ex.id" class="card mb-2 ex-card"
-        :style="exDrag.active && exDrag.idx === i
-          ? {transform: 'translateY(' + exDrag.offsetY + 'px)', transition: 'none', position: 'relative', zIndex: 10, boxShadow: 'var(--shadow-lg)'}
-          : {transition: 'transform 180ms ease'}">
+        :style="exSort.style(i)">
         <div class="flex items-center mb-2" style="gap:4px;">
           <div v-if="session.exercises.length > 1" class="drag-handle" aria-label="Drag to reorder exercise"
-            @touchstart.prevent="exDragStart($event, i)" @mousedown.prevent="exDragStart($event, i)" v-html="ICON_GRIP"></div>
+            @touchstart.prevent="exSort.start($event, i)" @mousedown.prevent="exSort.start($event, i)" v-html="ICON_GRIP"></div>
           <input v-model="ex.name" placeholder="Exercise name" style="font-size:16px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text-primary); padding:0; flex:1; min-width:0;" />
           <button class="icon-btn text-danger" aria-label="Remove exercise" @click="removeExercise(i)" v-html="ICON_X"></button>
         </div>
@@ -292,7 +355,7 @@ const SessionEditor = {
         <span v-html="ICON_PLUS"></span> Add exercise
       </button>
 
-      <div class="footer-bar-spacer"></div>
+      <div class="footer-bar-spacer" v-footer-space></div>
       <div class="footer-bar">
         <p v-if="missing" class="footer-hint">{{ missing }}</p>
         <div class="flex gap-2">
@@ -310,6 +373,7 @@ const SessionEditor = {
 export const ConfigureCycleView = {
   props: { hasProgram: Boolean },
   components: { DrumPicker, SessionEditor, RestoreBackup },
+  directives: { footerSpace: vFooterSpace },
   emits: ['saved'],
   setup(_, { emit }) {
     const step = ref('count');  // 'count' | 'sessions' | 'summary'
@@ -366,15 +430,6 @@ export const ConfigureCycleView = {
       reindex();
       remember({ kind: 'session', item, sIdx: idx, label: item.name });
     }
-    function moveSession(idx, dir) {
-      const newIdx = idx + dir;
-      if (newIdx < 0 || newIdx >= sessions.value.length) return;
-      const arr = [...sessions.value];
-      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-      arr.forEach((s, i) => { s.sessionIndex = i; });
-      sessions.value = arr;
-    }
-
     function deleteExercise(sIdx, eIdx) {
       const session = sessions.value[sIdx];
       const item = session.exercises[eIdx];
@@ -406,79 +461,11 @@ export const ConfigureCycleView = {
       return empty ? `Add an exercise to ${empty.name || 'every session'} or remove it` : '';
     });
 
-    function moveExercise(sIdx, eIdx, dir) {
-      const newIdx = eIdx + dir;
-      const exercises = [...sessions.value[sIdx].exercises];
-      if (newIdx < 0 || newIdx >= exercises.length) return;
-      [exercises[eIdx], exercises[newIdx]] = [exercises[newIdx], exercises[eIdx]];
-      sessions.value[sIdx] = { ...sessions.value[sIdx], exercises };
-    }
-
-    // ── Drag-to-reorder ───────────────────────────────────────────
-    const drag = reactive({
-      active: false,
-      type: null,   // 'session' | 'exercise'
-      sIdx: null,
-      eIdx: null,
-      startY: 0,
-      offsetY: 0,
+    const reviewList = ref(null);
+    const sessionSort = useDragSort(reviewList, '.review-card', (from, to) => {
+      sessions.value.splice(to, 0, sessions.value.splice(from, 1)[0]);
+      reindex();
     });
-
-    function onDragStart(e, type, sIdx, eIdx) {
-      const isTouch = e.type === 'touchstart';
-      const point = isTouch ? e.touches[0] : e;
-      drag.active = true;
-      drag.type = type;
-      drag.sIdx = sIdx;
-      drag.eIdx = eIdx;
-      drag.startY = point.clientY;
-      drag.offsetY = 0;
-      if (isTouch) {
-        document.addEventListener('touchmove', onDragMove, { passive: false });
-        document.addEventListener('touchend', onDragEnd);
-      } else {
-        document.addEventListener('mousemove', onDragMove);
-        document.addEventListener('mouseup', onDragEnd);
-      }
-    }
-
-    function onDragMove(e) {
-      if (!drag.active) return;
-      e.preventDefault();
-      const point = e.touches ? e.touches[0] : e;
-      drag.offsetY = point.clientY - drag.startY;
-      const threshold = drag.type === 'session' ? 60 : 40;
-      if (Math.abs(drag.offsetY) > threshold) {
-        const dir = drag.offsetY > 0 ? 1 : -1;
-        if (drag.type === 'session') {
-          const newIdx = drag.sIdx + dir;
-          if (newIdx >= 0 && newIdx < sessions.value.length) {
-            moveSession(drag.sIdx, dir);
-            drag.sIdx = newIdx;
-            drag.startY = point.clientY;
-            drag.offsetY = 0;
-          }
-        } else {
-          const exercises = sessions.value[drag.sIdx].exercises;
-          const newIdx = drag.eIdx + dir;
-          if (newIdx >= 0 && newIdx < exercises.length) {
-            moveExercise(drag.sIdx, drag.eIdx, dir);
-            drag.eIdx = newIdx;
-            drag.startY = point.clientY;
-            drag.offsetY = 0;
-          }
-        }
-      }
-    }
-
-    function onDragEnd() {
-      drag.active = false;
-      drag.offsetY = 0;
-      document.removeEventListener('touchmove', onDragMove);
-      document.removeEventListener('touchend', onDragEnd);
-      document.removeEventListener('mousemove', onDragMove);
-      document.removeEventListener('mouseup', onDragEnd);
-    }
 
     // Save programme (iterates sessions array correctly)
     async function saveProg() {
@@ -496,7 +483,7 @@ export const ConfigureCycleView = {
       } finally { saving.value = false; }
     }
 
-    return { step, sessionCount, sessions, curIdx, confirmCount, updateSession, nextSession, prevSession, deleteSession, deleteExercise, drag, onDragStart, saveProg, saving, reviewing, editSession, removed, undoRemove, saveMissing, plural, ICON_GRIP, ICON_X };
+    return { step, sessionCount, sessions, curIdx, confirmCount, updateSession, nextSession, prevSession, deleteSession, deleteExercise, reviewList, sessionSort, saveProg, saving, reviewing, editSession, removed, undoRemove, saveMissing, plural, ICON_GRIP, ICON_GRIP_LG, ICON_X };
   },
   template: `
     <div>
@@ -532,14 +519,12 @@ export const ConfigureCycleView = {
           <p class="section-title">Review your cycle</p>
           <p class="text-sm text-secondary mb-4" style="line-height:1.45;">You'll train these sessions in this order, then start again. Drag to reorder; tap Edit to change exercises.</p>
 
-          <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card review-card"
-            :style="drag.active && drag.type === 'session' && drag.sIdx === sIdx
-              ? {transform: 'translateY('+drag.offsetY+'px)', transition: 'none', zIndex: 10, position: 'relative', boxShadow: 'var(--shadow-lg)', opacity: 0.92}
-              : {transition: 'transform 180ms ease'}">
+          <div ref="reviewList">
+          <div v-for="(s, sIdx) in sessions" :key="s.tempId" class="card review-card" :style="sessionSort.style(sIdx)">
+            <div class="drag-handle review-grip" aria-label="Drag to reorder session"
+              @touchstart.prevent="sessionSort.start($event, sIdx)"
+              @mousedown.prevent="sessionSort.start($event, sIdx)" v-html="ICON_GRIP_LG"></div>
             <div class="review-row review-row--head">
-              <div class="drag-handle" aria-label="Drag to reorder session"
-                @touchstart.prevent="onDragStart($event, 'session', sIdx, null)"
-                @mousedown.prevent="onDragStart($event, 'session', sIdx, null)" v-html="ICON_GRIP"></div>
               <span class="review-num">{{ sIdx + 1 }}</span>
               <p class="review-title">{{ s.name }}</p>
               <button class="review-edit" @click="editSession(sIdx)">Edit</button>
@@ -552,8 +537,9 @@ export const ConfigureCycleView = {
             </div>
             <p v-if="!s.exercises.length" class="review-empty">No exercises left. <button class="text-link" style="display:inline; padding:0;" @click="editSession(sIdx)">Add some</button></p>
           </div>
+          </div>
 
-          <div class="footer-bar-spacer"></div>
+          <div class="footer-bar-spacer" v-footer-space></div>
           <div class="footer-bar">
             <div v-if="removed" class="undo-bar">
               <span>Removed “{{ removed.label }}”</span>

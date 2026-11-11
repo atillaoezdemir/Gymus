@@ -981,7 +981,7 @@
     }
 
     .footer-bar-spacer {
-      height: 120px;
+      height: 96px; /* replaced on mount by the footer's measured height */
     }
 
     .footer-hint {
@@ -1393,12 +1393,16 @@
 
     /* ── Setup: review step ── */
     .review-card {
-      padding: 6px 8px 10px 12px;
+      padding: 6px 12px 10px;
       margin-bottom: 12px;
     }
 
     .card.review-card+.card.review-card {
       margin-top: 0;
+    }
+
+    .card.review-card:last-child {
+      margin-bottom: 0;
     }
 
     .review-row {
@@ -1419,16 +1423,32 @@
 
     .review-row--ex {
       min-height: 44px;
-      margin: 0 52px 0 32px;
+      margin: 0 32px;
     }
 
     .review-row--ex+.review-row--ex {
       border-top: 1px solid var(--bg-card-alt);
     }
 
-    .review-row .drag-handle {
+    /* Number sits at the top of the left column; the grip is centred in the
+       same column below it, and the whole column is the drag area. */
+    .review-card {
+      position: relative;
+    }
+
+    .drag-handle.review-grip {
+      position: absolute;
+      left: 12px;
+      top: 60px;    /* below the header: 6px padding + 52px row + 2px gap */
+      bottom: 10px; /* card bottom padding, so it centres on the exercise rows */
       width: 24px;
-      min-height: 44px;
+      min-height: 0;
+      border-radius: 0;
+    }
+
+    .drag-handle.review-grip:hover,
+    .drag-handle.review-grip:active {
+      background: none;
     }
 
     .review-num {
@@ -1478,6 +1498,13 @@
       -webkit-tap-highlight-color: transparent;
     }
 
+    .review-row--head .review-x {
+      /* Cancel the row gap (the icon's own whitespace separates it from Edit)
+         and let the 44px hit area overhang the card padding. */
+      margin-left: -10px;
+      margin-right: -10px; /* icon centre 24px from the edge, mirroring the number and grip */
+    }
+
     .review-x {
       display: flex;
       align-items: center;
@@ -1502,7 +1529,7 @@
     }
 
     .review-empty {
-      padding: 12px 52px 4px 32px;
+      padding: 12px 32px 4px;
       font-size: 14px;
       color: var(--text-secondary);
     }
