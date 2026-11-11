@@ -839,15 +839,19 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      color: var(--text-muted);
+      width: 28px;
+      height: 28px;
+      color: var(--accent-dark);
       -webkit-tap-highlight-color: transparent;
     }
 
+    .info-btn span,
+    .info-btn svg {
+      display: block;
+    }
+
     .info-btn[aria-expanded="true"] {
-      color: var(--accent-dark);
+      opacity: 0.6;
     }
 
     .info-note {
